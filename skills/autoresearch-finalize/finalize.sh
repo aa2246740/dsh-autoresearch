@@ -45,7 +45,7 @@ fail() { cleanup_data; echo -e "${RED}ERROR: $1${NC}" >&2; exit 1; }
 is_session_file() {
   case "/$1/" in
     */.auto/*) return 0;;
-    */autoresearch.*/*) return 1;;
+    */autoresearch.*/*) return 0;;
     *) return 1;;
   esac
 }
