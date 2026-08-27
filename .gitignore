@@ -1,0 +1,9 @@
+node_modules/
+lib/
+.dshx/
+*.tsbuildinfo
+.DS_Store
+.env
+.env.*
+coverage/
+agent-tools/

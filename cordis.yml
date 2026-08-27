@@ -1,0 +1,4 @@
+# portable overlay: relative name only. dshx start/verify rewrite it to an absolute path.
+- insert:
+    - id: dsh-autoresearch
+      name: './src/index.ts'

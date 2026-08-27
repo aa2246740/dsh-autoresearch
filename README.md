@@ -11,7 +11,7 @@ English: [README.en.md](./README.en.md)
 - `/autoresearch` → **新开一次 Autoresearch** → 配置 GUI 里确认并开始
 - composer 工具行 **新开 Autoresearch**（同样走进配置 GUI）
 
-才会把 `active` 设为 true。之后模型改代码、跐 `.auto/measure.sh`、调用 `autoresearch_log_experiment`。keep 会提交；discard / crash / checks_failed 会回滚代码但保留 `.auto/`。
+才会把 `active` 设为 true。之后模型改代码、跑 `.auto/measure.sh`、调用 `autoresearch_log_experiment`。keep 会提交；discard / crash / checks_failed 会回滚代码但保留 `.auto/`。
 
 同会话自动续跑由 Host `agent.followup` 完成，直到 `maxIterations`、`/autoresearch off`、卡住或你打断。
 

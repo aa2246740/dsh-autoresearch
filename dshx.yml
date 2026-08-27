@@ -1,0 +1,5 @@
+id: dsh-autoresearch
+entry: src/index.ts
+marker: "[dsh-autoresearch] loaded"
+kind: client
+profile: web
