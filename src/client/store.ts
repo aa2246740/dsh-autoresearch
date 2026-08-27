@@ -1,34 +1,25 @@
 import { parseEmbeddedState, type AutoresearchSnapshot } from '../types.js'
 
-export type LabPage = 'create' | 'confirm' | 'lab'
+export type DockMode = 'hidden' | 'init' | 'run'
+export type LabPage = 'create' | 'lab'
 export type LabPhase = 'idle' | 'configuring' | 'running' | 'done'
 
+/** Init card fields only. Metric / direction / measure.sh are inferred after confirm. */
 export interface ExperimentDraft {
   goal: string
-  provider: string
-  model: string
-  modelLabel: string
   maxRuns: string
-  metricName: string
-  direction: 'lower' | 'higher'
-  success: string
-  allowNoGit: boolean
 }
 
 export const emptyDraft = (): ExperimentDraft => ({
   goal: '',
-  provider: 'minimax-cn',
-  model: 'MiniMax-M2.7',
-  modelLabel: 'MiniMax CN / MiniMax-M2.7',
   maxRuns: '3',
-  metricName: 'errors',
-  direction: 'lower',
-  success: 'errors 降到 0',
-  allowNoGit: false,
 })
 
 export interface LabState {
-  open: boolean
+  /** Reserved composer dock: hidden on the daily home, init or run after `/autoresearch`. */
+  dock: DockMode
+  /** Optional larger view. Default off so Agent output stays visible. */
+  overlayOpen: boolean
   page: LabPage
   phase: LabPhase
   sessionId: string | null
@@ -40,7 +31,8 @@ export interface LabState {
 }
 
 const initial: LabState = {
-  open: false,
+  dock: 'hidden',
+  overlayOpen: false,
   page: 'create',
   phase: 'idle',
   sessionId: null,
@@ -72,13 +64,48 @@ export function patchLab(patch: Partial<LabState>): void {
   emit()
 }
 
-export function openLab(page: LabPage = 'create'): void {
-  const phase = page === 'lab' ? state.phase : 'configuring'
-  patchLab({ open: true, page, phase, error: null })
+export function resetLab(): void {
+  state = { ...initial, draft: emptyDraft() }
+  emit()
 }
 
-export function closeLab(): void {
-  patchLab({ open: false })
+/** `/autoresearch` or slash 「新开」: show the init card. Does not activate the loop. */
+export function showInitDock(): void {
+  patchLab({
+    dock: 'init',
+    overlayOpen: false,
+    page: 'create',
+    phase: 'configuring',
+    draft: emptyDraft(),
+    error: null,
+    busy: false,
+  })
+}
+
+/** Same reserved dock, run-monitor state. Overlay stays closed unless asked. */
+export function showRunDock(): void {
+  const running = state.snapshot?.active === true
+  const done = (state.snapshot?.totalRuns ?? 0) > 0 && !running
+  patchLab({
+    dock: 'run',
+    page: 'lab',
+    phase: running ? 'running' : done ? 'done' : state.phase === 'configuring' ? 'running' : state.phase,
+    error: null,
+  })
+}
+
+export function openOverlay(): void {
+  patchLab({ overlayOpen: true, page: 'lab', error: null })
+}
+
+export function closeOverlay(): void {
+  patchLab({ overlayOpen: false })
+}
+
+/** Hide the init dock. Running monitor stays up (长显). */
+export function cancelInitDock(): void {
+  if (state.dock === 'run' || state.phase === 'running') return
+  patchLab({ dock: 'hidden', overlayOpen: false, page: 'create', phase: 'idle', error: null })
 }
 
 export function rememberSession(sessionId: string): void {
@@ -92,7 +119,15 @@ export function applyCommandText(text: string): AutoresearchSnapshot | undefined
     const active = parsed.snapshot.active
     const hasRuns = (parsed.snapshot.totalRuns ?? 0) > 0
     const phase: LabPhase = active ? 'running' : hasRuns ? 'done' : state.phase === 'configuring' ? 'configuring' : 'idle'
-    patchLab({ snapshot: parsed.snapshot, error: null, notice: parsed.text, phase })
+    const dock: DockMode = state.dock === 'init' && !active ? 'init' : (active || hasRuns || state.dock === 'run' ? 'run' : state.dock)
+    patchLab({
+      snapshot: parsed.snapshot,
+      error: null,
+      notice: parsed.text,
+      phase,
+      dock,
+      page: dock === 'run' ? 'lab' : state.page,
+    })
   }
   return parsed.snapshot
 }
@@ -103,14 +138,18 @@ export function formatMetric(snapshot: AutoresearchSnapshot | null, value: numbe
   return `${Number.isInteger(value) ? String(value) : value.toFixed(3)}${unit}`
 }
 
+export function parseRoundBudget(raw: string): number | null {
+  const parsed = Number.parseInt(String(raw).trim(), 10)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+/**
+ * Command sent only after 「确认并开始」.
+ * Goal is natural language; rounds become maxIterations via `for N runs`.
+ * Metric / direction / allowNoGit are not encoded — the agent infers them after confirm.
+ */
 export function buildStartLine(draft: ExperimentDraft): string {
-  const bits = [
-    draft.goal.trim(),
-    draft.success.trim() ? `成功标准：${draft.success.trim()}` : '',
-    `for ${draft.maxRuns.trim() || '3'} runs`,
-    `metric ${draft.metricName.trim() || 'errors'}`,
-    draft.direction === 'higher' ? 'higher is better' : 'lower is better',
-  ]
-  if (draft.allowNoGit) bits.push('allowNoGit')
-  return `/autoresearch ${bits.filter(Boolean).join(' ')}`
+  const goal = draft.goal.trim()
+  const runs = parseRoundBudget(draft.maxRuns) ?? 3
+  return `/autoresearch ${goal} for ${runs} runs`
 }

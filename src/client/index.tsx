@@ -9,13 +9,16 @@ import { parseEmbeddedState } from '../types.js'
 import {
   applyCommandText,
   buildStartLine,
-  closeLab,
-  emptyDraft,
+  cancelInitDock,
+  closeOverlay,
   formatMetric,
   getLabState,
-  openLab,
+  openOverlay,
+  parseRoundBudget,
   patchLab,
   rememberSession,
+  showInitDock,
+  showRunDock,
   subscribeLab,
   type ExperimentDraft,
 } from './store.js'
@@ -26,17 +29,9 @@ export const inject = [
   'sessions',
   'remote',
   'remote.commands',
-  'connection',
   'settingsScope',
   'commandUi',
 ]
-
-type ModelOption = { key: string; provider: string; model: string; label: string }
-
-type SessionModelsApi = {
-  models: (payload: { sessionId: string }) => Promise<RemoteAnswer>
-  selectModel: (payload: { sessionId: string; provider: string; model: string }) => Promise<RemoteAnswer>
-}
 
 type AnyCtx = ClientContext & {
   slots: {
@@ -47,7 +42,6 @@ type AnyCtx = ClientContext & {
   remote: {
     commands: { execute: (sessionId: string, line: string, images: unknown[]) => Promise<RemoteAnswer> }
   }
-  get?: (name: string) => { api?: { sessions?: SessionModelsApi } } | undefined
   settingsScope: { bind: (opts: { namespace: string }) => SettingsScope }
   commandUi: CommandUiContract
 }
@@ -66,13 +60,13 @@ interface SettingsScope {
 
 const colors = {
   bg: 'var(--dsw-alias-bg-primary, Canvas)',
-  panel: 'var(--dsw-alias-bg-secondary, Canvas)',
+  panel: 'var(--dsw-specific-tip, var(--dsw-alias-bg-secondary, Canvas))',
   text: 'var(--dsw-alias-label-primary, CanvasText)',
   muted: 'var(--dsw-alias-label-secondary, GrayText)',
-  line: 'var(--dsw-alias-border-l2, ButtonBorder)',
-  good: 'var(--dsw-alias-text-success, #1a7f37)',
-  bad: 'var(--dsw-alias-text-danger, #cf222e)',
-  accent: 'var(--dsw-alias-text-accent, #0969da)',
+  line: 'var(--dsw-alias-border-l1, var(--dsw-alias-border-l2, ButtonBorder))',
+  good: 'var(--dsw-alias-text-success, var(--dsw-alias-state-success-primary, #1a7f37))',
+  bad: 'var(--dsw-alias-text-danger, var(--dsw-alias-state-error-primary, #cf222e))',
+  accent: 'var(--dsw-alias-text-accent, var(--dsw-alias-state-business-primary, #0969da))',
   warn: 'var(--dsw-alias-text-warning, #9a6700)',
 }
 
@@ -81,18 +75,20 @@ const font: CSSProperties = {
   color: colors.text,
 }
 
-function useLab() {
-  return useSyncExternalStore(subscribeLab, getLabState, getLabState)
+const dockShell: CSSProperties = {
+  ...font,
+  boxSizing: 'border-box',
+  width: 'calc(100% - var(--dsh-composer-side-clearance, 0px) * 2 - var(--dsh-composer-dock-inset, 0px) * 4)',
+  maxWidth: 'calc(var(--dsh-composer-card-max-width, 960px) - var(--dsh-composer-dock-inset, 0px) * 2)',
+  margin: '0 auto',
+  border: `1px solid ${colors.line}`,
+  borderRadius: 12,
+  background: colors.panel,
+  padding: '10px 12px',
 }
 
-function unwrapRpc(answered: RemoteAnswer): { ok: boolean; value?: unknown; error?: string } {
-  if (answered.result && typeof answered.result === 'object') {
-    const inner = answered.result
-    if (inner.ok === false) return { ok: false, error: `${inner.error?.message ?? 'rpc failed'} (${inner.error?.code ?? 'error'})` }
-    if (inner.ok === true) return { ok: true, value: inner.value }
-  }
-  if (answered.ok === false) return { ok: false, error: `${answered.error?.message ?? 'rpc failed'} (${answered.error?.code ?? 'error'})` }
-  return { ok: true, value: answered.value }
+function useLab() {
+  return useSyncExternalStore(subscribeLab, getLabState, getLabState)
 }
 
 async function executeLine(ctx: AnyCtx, sessionId: string, line: string): Promise<string> {
@@ -144,66 +140,10 @@ function fieldStyle(): CSSProperties {
   return { ...font, background: colors.bg, border: `1px solid ${colors.line}`, borderRadius: 8, padding: 8 }
 }
 
-const FALLBACK_MODELS: ModelOption[] = [
-  { key: 'minimax-cn::MiniMax-M2.7', provider: 'minimax-cn', model: 'MiniMax-M2.7', label: 'MiniMax CN / MiniMax-M2.7' },
-  { key: 'minimax-cn::MiniMax-M3', provider: 'minimax-cn', model: 'MiniMax-M3', label: 'MiniMax CN / MiniMax-M3' },
-  { key: 'openrouter::minimax/minimax-m2.5', provider: 'openrouter', model: 'minimax/minimax-m2.5', label: 'OpenRouter / MiniMax M2.5' },
-  { key: 'openrouter::minimax/minimax-m2.7', provider: 'openrouter', model: 'minimax/minimax-m2.7', label: 'OpenRouter / MiniMax M2.7' },
-  { key: 'zai-coding-cn::glm-4.5-air', provider: 'zai-coding-cn', model: 'glm-4.5-air', label: 'Z.AI Coding CN / GLM-4.5-Air' },
-  { key: 'zai-coding-cn::glm-4.7', provider: 'zai-coding-cn', model: 'glm-4.7', label: 'Z.AI Coding CN / GLM-4.7' },
-]
-
-function sessionModelsApi(ctx: AnyCtx): SessionModelsApi | undefined {
-  try {
-    return ctx.get?.('connection')?.api?.sessions
-  } catch {
-    return undefined
-  }
-}
-
-async function loadModelOptions(ctx: AnyCtx, sessionId: string): Promise<{ options: ModelOption[]; current?: ModelOption }> {
-  const options: ModelOption[] = [...FALLBACK_MODELS]
-  const api = sessionModelsApi(ctx)
-  if (!api?.models) return { options }
-  const answered = await api.models({ sessionId })
-  const rpc = unwrapRpc(answered)
-  if (!rpc.ok) return { options }
-  const payload = (rpc.value ?? {}) as {
-    current?: { provider?: string; model?: string }
-    groups?: Array<{ id: string; name: string; models?: Array<{ id: string; name: string }> }>
-  }
-  for (const group of payload.groups ?? []) {
-    for (const model of group.models ?? []) {
-      const key = `${group.id}::${model.id}`
-      if (options.some((item) => item.key === key)) continue
-      options.push({
-        key,
-        provider: group.id,
-        model: model.id,
-        label: `${group.name} / ${model.name}`,
-      })
-    }
-  }
-  const current = payload.current?.provider && payload.current.model
-    ? options.find((item) => item.provider === payload.current!.provider && item.model === payload.current!.model)
-      ?? { key: `${payload.current.provider}::${payload.current.model}`, provider: payload.current.provider, model: payload.current.model, label: `${payload.current.provider} / ${payload.current.model}` }
-    : undefined
-  return { options, current }
-}
-
-async function selectSessionModel(ctx: AnyCtx, sessionId: string, draft: ExperimentDraft): Promise<void> {
-  if (!draft.provider || !draft.model) return
-  const api = sessionModelsApi(ctx)
-  if (!api?.selectModel) throw new Error('当前客户端拿不到 session.selectModel，无法切换到所选模型。')
-  const answered = await api.selectModel({ sessionId, provider: draft.provider, model: draft.model })
-  const rpc = unwrapRpc(answered)
-  if (!rpc.ok) throw new Error(rpc.error ?? '切换模型失败')
-}
-
 function Sparkline({ runs, direction }: { runs: ExperimentRun[]; direction: 'lower' | 'higher' }) {
   const points = runs.filter((run) => Number.isFinite(run.metric))
   if (points.length === 0) {
-    return <div style={{ color: colors.muted, fontSize: 13 }}>还没有可绘制的指标。确认开始后，轮次会出现在这里，而不是首页聊天里。</div>
+    return <div style={{ color: colors.muted, fontSize: 13 }}>还没有可绘制的指标。确认开始后，轮次会出现在这里。</div>
   }
   const values = points.map((run) => run.metric)
   const min = Math.min(...values)
@@ -230,181 +170,95 @@ function Sparkline({ runs, direction }: { runs: ExperimentRun[]; direction: 'low
   )
 }
 
-function CreateForm({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | null }) {
+function InitDockCard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | null }) {
   const lab = useLab()
   const [draft, setDraft] = useState<ExperimentDraft>(lab.draft)
-  const [models, setModels] = useState<ModelOption[]>([])
-  const [loadingModels, setLoadingModels] = useState(false)
 
-  useEffect(() => {
-    if (!sessionId) return
-    let cancelled = false
-    setLoadingModels(true)
-    void loadModelOptions(ctx, sessionId).then(({ options, current }) => {
-      if (cancelled) return
-      setModels(options)
-      setDraft((prev) => {
-        if (prev.provider && prev.model) return prev
-        if (!current) return prev
-        return { ...prev, provider: current.provider, model: current.model, modelLabel: current.label }
-      })
-    }).catch((error: unknown) => {
-      if (!cancelled) patchLab({ error: error instanceof Error ? error.message : String(error) })
-    }).finally(() => {
-      if (!cancelled) setLoadingModels(false)
-    })
-    return () => { cancelled = true }
-  }, [ctx, sessionId])
-
-  function onSubmit(event: FormEvent) {
+  async function onConfirm(event: FormEvent) {
     event.preventDefault()
     if (!sessionId) {
-      patchLab({ error: '没有活动会话。先打开一个对话，再新开 Autoresearch。' })
+      patchLab({ error: '没有活动会话。先打开一个对话，再 /autoresearch。' })
       return
     }
     if (!draft.goal.trim()) {
-      patchLab({ error: '请填写要研究的问题。普通聊天不会启动循环。' })
+      patchLab({ error: '请填写目标。普通聊天不会启动循环。' })
       return
     }
-    if (!draft.success.trim()) {
-      patchLab({ error: '请填写成功标准，确认后才会执行。' })
+    if (parseRoundBudget(draft.maxRuns) === null) {
+      patchLab({ error: '轮次必须是大于 0 的整数。' })
       return
     }
-    patchLab({ draft, page: 'confirm', error: null, phase: 'configuring' })
-  }
-
-  return (
-    <form onSubmit={onSubmit} style={{ display: 'grid', gap: 12 }}>
-      <div>
-        <div style={{ fontSize: 20, fontWeight: 700 }}>新开一次 Autoresearch</div>
-        <div style={{ color: colors.muted, fontSize: 13, marginTop: 4 }}>
-          先配参数，下一步确认后才执行。首页不会常驻实验面板。
-        </div>
-      </div>
-      <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-        问题
-        <textarea
-          value={draft.goal}
-          onChange={(event) => setDraft({ ...draft, goal: event.target.value })}
-          rows={4}
-          placeholder="例如：把 examples/score.py 的错误数降到 0。每次只改一个变量，最多 3 轮。"
-          style={{ ...fieldStyle(), resize: 'vertical' }}
-        />
-      </label>
-      <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-        模型
-        <select
-          value={draft.provider && draft.model ? `${draft.provider}::${draft.model}` : ''}
-          onChange={(event) => {
-            const next = models.find((item) => item.key === event.target.value)
-            setDraft({
-              ...draft,
-              provider: next?.provider ?? '',
-              model: next?.model ?? '',
-              modelLabel: next?.label ?? '当前会话模型',
-            })
-          }}
-          style={fieldStyle()}
-        >
-          <option value="">{loadingModels ? '正在读取模型目录…' : '使用当前会话模型'}</option>
-          {models.map((item) => (
-            <option key={item.key} value={item.key}>{item.label}</option>
-          ))}
-        </select>
-      </label>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
-        <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-          轮次 / 预算
-          <input value={draft.maxRuns} onChange={(event) => setDraft({ ...draft, maxRuns: event.target.value })} style={fieldStyle()} />
-        </label>
-        <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-          主指标
-          <input value={draft.metricName} onChange={(event) => setDraft({ ...draft, metricName: event.target.value })} style={fieldStyle()} />
-        </label>
-        <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-          方向
-          <select value={draft.direction} onChange={(event) => setDraft({ ...draft, direction: event.target.value as 'lower' | 'higher' })} style={fieldStyle()}>
-            <option value="lower">越低越好</option>
-            <option value="higher">越高越好</option>
-          </select>
-        </label>
-      </div>
-      <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-        成功标准
-        <input
-          value={draft.success}
-          onChange={(event) => setDraft({ ...draft, success: event.target.value })}
-          placeholder="例如：errors = 0，否则本轮 discard"
-          style={fieldStyle()}
-        />
-      </label>
-      <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: colors.muted }}>
-        <input type="checkbox" checked={draft.allowNoGit} onChange={(event) => setDraft({ ...draft, allowNoGit: event.target.checked })} />
-        允许无 Git（仅一次性试跑；keep/discard 将无法安全提交或回滚）
-      </label>
-      {lab.error ? <div style={{ color: colors.bad, fontSize: 13, whiteSpace: 'pre-wrap' }}>{lab.error}</div> : null}
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-        <LabButton onClick={closeLab}>取消</LabButton>
-        <LabButton type="submit" kind="primary">下一步：确认参数</LabButton>
-      </div>
-    </form>
-  )
-}
-
-function ConfirmForm({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | null }) {
-  const lab = useLab()
-  const draft = lab.draft
-
-  async function onConfirm() {
-    if (!sessionId) {
-      patchLab({ error: '没有活动会话。' })
-      return
-    }
-    patchLab({ busy: true, error: null })
+    patchLab({ draft, busy: true, error: null })
     try {
-      await selectSessionModel(ctx, sessionId, draft)
       await executeLine(ctx, sessionId, buildStartLine(draft))
-      patchLab({ page: 'lab', phase: 'running', busy: false, open: true })
+      patchLab({ dock: 'run', page: 'lab', phase: 'running', overlayOpen: false, busy: false })
     } catch (error) {
       patchLab({ busy: false, error: error instanceof Error ? error.message : String(error) })
     }
   }
 
-  const rows: Array<[string, string]> = [
-    ['问题', draft.goal],
-    ['模型', draft.modelLabel],
-    ['轮次 / 预算', `${draft.maxRuns} 轮`],
-    ['主指标', `${draft.metricName} · ${draft.direction === 'higher' ? '越高越好' : '越低越好'}`],
-    ['成功标准', draft.success],
-  ]
-
   return (
-    <div style={{ display: 'grid', gap: 12 }}>
-      <div>
-        <div style={{ fontSize: 20, fontWeight: 700 }}>确认后才执行</div>
-        <div style={{ color: colors.muted, fontSize: 13, marginTop: 4 }}>核对下面的实验参数。点确认才会激活循环并打开专属实验室。</div>
+    <form
+      data-autoresearch="init-card"
+      onSubmit={(event) => void onConfirm(event)}
+      style={{ display: 'grid', gap: 8 }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>新开 Autoresearch</div>
+        <div style={{ color: colors.muted, fontSize: 12 }}>确认前不会开跑</div>
       </div>
-      <div style={{ display: 'grid', gap: 8, background: colors.panel, border: `1px solid ${colors.line}`, borderRadius: 12, padding: 14 }}>
-        {rows.map(([label, value]) => (
-          <div key={label}>
-            <div style={{ color: colors.muted, fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</div>
-            <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{value || '—'}</div>
-          </div>
-        ))}
+      <label style={{ display: 'grid', gap: 4, fontSize: 12, color: colors.muted }}>
+        目标
+        <textarea
+          data-autoresearch-field="goal"
+          value={draft.goal}
+          onChange={(event) => setDraft({ ...draft, goal: event.target.value })}
+          rows={4}
+          placeholder="例如：把 examples/score.py 的错误数降到 0。每次只改一个变量。"
+          style={{ ...fieldStyle(), resize: 'vertical', minHeight: 72, fontSize: 13 }}
+        />
+      </label>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+        <label style={{ display: 'grid', gap: 4, fontSize: 12, color: colors.muted }}>
+          轮次
+          <input
+            data-autoresearch-field="rounds"
+            type="number"
+            min={1}
+            step={1}
+            inputMode="numeric"
+            value={draft.maxRuns}
+            onChange={(event) => setDraft({ ...draft, maxRuns: event.target.value })}
+            style={{ ...fieldStyle(), width: 88, fontSize: 13 }}
+          />
+        </label>
+        <div style={{ flex: 1 }} />
+        <LabButton onClick={cancelInitDock}>取消</LabButton>
+        <LabButton type="submit" kind="primary" disabled={lab.busy}>
+          {lab.busy ? '正在启动…' : '确认并开始'}
+        </LabButton>
       </div>
-      {lab.error ? <div style={{ color: colors.bad, fontSize: 13, whiteSpace: 'pre-wrap' }}>{lab.error}</div> : null}
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-        <LabButton onClick={() => patchLab({ page: 'create' })}>返回修改</LabButton>
-        <LabButton kind="primary" disabled={lab.busy} onClick={() => void onConfirm()}>{lab.busy ? '正在启动…' : '确认并开始'}</LabButton>
-      </div>
-    </div>
+      {lab.error ? <div style={{ color: colors.bad, fontSize: 12, whiteSpace: 'pre-wrap' }}>{lab.error}</div> : null}
+    </form>
   )
 }
 
-function LabDashboard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | null }) {
+function currentRuns(snapshot: ReturnType<typeof getLabState>['snapshot']): ExperimentRun[] {
+  if (!snapshot) return []
+  const last = snapshot.results.at(-1)?.segment
+  return snapshot.results.filter((run) => run.segment === last || run.segment === 0)
+}
+
+function RunDockCard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | null }) {
   const lab = useLab()
   const snapshot = lab.snapshot
   const running = lab.phase === 'running' || Boolean(snapshot?.active)
+  const budget = snapshot?.maxIterations ?? parseRoundBudget(lab.draft.maxRuns) ?? 3
+  const round = snapshot?.currentSegmentRuns ?? 0
+  const runs = currentRuns(snapshot)
+  const latest = runs.at(-1)
+  const metricName = snapshot?.metricName && snapshot.metricName !== 'metric' ? snapshot.metricName : null
+  const liveValue = latest?.metric ?? snapshot?.bestKeptMetric ?? snapshot?.baselineMetric ?? null
 
   useEffect(() => {
     if (!sessionId) return
@@ -422,46 +276,110 @@ function LabDashboard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | nul
     }
   }, [ctx, sessionId])
 
-  const current = snapshot?.results.filter((run) => run.segment === snapshot.results.at(-1)?.segment || run.segment === 0) ?? snapshot?.results ?? []
+  return (
+    <div data-autoresearch="run-card" style={{ display: 'grid', gap: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>
+          第 {round} / {budget} 轮
+          <span style={{ color: colors.muted, fontWeight: 400 }}>
+            {' · '}
+            {running ? '执行中' : snapshot?.manualOff ? '已暂停' : lab.phase === 'done' ? '已结束' : '监视'}
+          </span>
+        </div>
+        <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13 }}>
+          {metricName ? `${metricName} ${formatMetric(snapshot, liveValue)}` : '等待账本指标'}
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', minHeight: 22 }}>
+        {runs.length === 0 ? (
+          <span style={{ color: colors.muted, fontSize: 12 }}>
+            {running ? '正在跑第一轮。keep / discard 会写在这里。' : '还没有实验记录。'}
+          </span>
+        ) : runs.map((run) => (
+          <span
+            key={run.run}
+            data-autoresearch-run={run.run}
+            data-autoresearch-status={run.status}
+            style={{
+              fontSize: 12,
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              color: statusColor(run.status),
+              border: `1px solid ${statusColor(run.status)}`,
+              borderRadius: 999,
+              padding: '1px 8px',
+            }}
+          >
+            #{run.run} {run.status}
+          </span>
+        ))}
+      </div>
+      {lab.error ? <div style={{ color: colors.bad, fontSize: 12, whiteSpace: 'pre-wrap' }}>{lab.error}</div> : null}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+        <LabButton disabled={!sessionId || lab.busy} onClick={() => sessionId && void executeLine(ctx, sessionId, '/autoresearch off')}>暂停续跑</LabButton>
+        <LabButton onClick={openOverlay}>打开更大视图</LabButton>
+      </div>
+    </div>
+  )
+}
+
+function AutoresearchDock({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string }) {
+  const lab = useLab()
+  rememberSession(sessionId)
+  if (lab.dock === 'hidden') return null
+  return (
+    <div data-autoresearch="dock" style={dockShell}>
+      {lab.dock === 'init' ? <InitDockCard ctx={ctx} sessionId={sessionId} /> : <RunDockCard ctx={ctx} sessionId={sessionId} />}
+    </div>
+  )
+}
+
+function LabDashboard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | null }) {
+  const lab = useLab()
+  const snapshot = lab.snapshot
+  const running = lab.phase === 'running' || Boolean(snapshot?.active)
+  const current = currentRuns(snapshot)
+
+  useEffect(() => {
+    if (!sessionId) return
+    let cancelled = false
+    const tick = () => {
+      void executeLine(ctx, sessionId, '/autoresearch status').catch((error: unknown) => {
+        if (!cancelled) patchLab({ error: error instanceof Error ? error.message : String(error) })
+      })
+    }
+    tick()
+    const id = window.setInterval(tick, 2000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [ctx, sessionId])
 
   return (
     <div style={{ display: 'grid', gap: 14 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
         <div>
-          <div style={{ fontSize: 20, fontWeight: 700 }}>{snapshot?.name ?? '实验实验室'}</div>
+          <div style={{ fontSize: 20, fontWeight: 700 }}>{snapshot?.name ?? '实验监视'}</div>
           <div style={{ color: colors.muted, fontSize: 13, marginTop: 4 }}>
-            {running ? '执行中 · 过程与结果只在这个窗口里可视化' : snapshot?.manualOff ? '已暂停自动续跑' : lab.phase === 'done' ? '本轮已结束' : '未激活'}
+            {running ? '执行中' : snapshot?.manualOff ? '已暂停自动续跑' : lab.phase === 'done' ? '本轮已结束' : '未激活'}
             {snapshot?.pendingContinuation ? ' · 等待同会话续跑' : ''}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <LabButton onClick={() => patchLab({ page: 'create', draft: emptyDraft(), phase: 'configuring', error: null })}>新开一次</LabButton>
-          <LabButton disabled={!sessionId || lab.busy} onClick={() => sessionId && executeLine(ctx, sessionId, '/autoresearch off')}>暂停续跑</LabButton>
-          <LabButton kind="danger" disabled={!sessionId || lab.busy} onClick={() => sessionId && executeLine(ctx, sessionId, '/autoresearch clear')}>清除账本</LabButton>
+          <LabButton onClick={() => { showInitDock() }}>新开一次</LabButton>
+          <LabButton disabled={!sessionId || lab.busy} onClick={() => sessionId && void executeLine(ctx, sessionId, '/autoresearch off')}>暂停续跑</LabButton>
+          <LabButton kind="danger" disabled={!sessionId || lab.busy} onClick={() => sessionId && void executeLine(ctx, sessionId, '/autoresearch clear')}>清除账本</LabButton>
         </div>
-      </div>
-      <div style={{
-        border: `1px solid ${running ? colors.accent : colors.line}`,
-        background: colors.panel,
-        borderRadius: 12,
-        padding: 12,
-        fontSize: 13,
-      }}>
-        <strong>{running ? '执行中' : lab.phase === 'done' ? '结果' : '实验室'}</strong>
-        <span style={{ color: colors.muted }}> · 模型 {lab.draft.modelLabel} · 成功标准 {lab.draft.success || '—'}</span>
       </div>
       {!snapshot?.gitOk && snapshot?.gitError ? (
         <div style={{ border: `1px solid ${colors.bad}`, borderRadius: 10, padding: 10, color: colors.bad, fontSize: 13 }}>{snapshot.gitError}</div>
-      ) : null}
-      {snapshot && !snapshot.measureExists ? (
-        <div style={{ border: `1px solid ${colors.warn}`, borderRadius: 10, padding: 10, color: colors.warn, fontSize: 13 }}>还没有 `.auto/measure.sh`。确认开始后模型应先写确定性基准，再 init / run / log。</div>
       ) : null}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
         {[
           ['基线', formatMetric(snapshot, snapshot?.baselineMetric ?? null)],
           ['最佳 keep', formatMetric(snapshot, snapshot?.bestKeptMetric ?? null)],
-          ['本段轮次', String(snapshot?.currentSegmentRuns ?? 0)],
-          ['主指标', snapshot ? `${snapshot.metricName} · ${snapshot.direction}` : '—'],
+          ['本段轮次', `${snapshot?.currentSegmentRuns ?? 0} / ${snapshot?.maxIterations ?? parseRoundBudget(lab.draft.maxRuns) ?? '—'}`],
+          ['主指标', snapshot && snapshot.metricName !== 'metric' ? `${snapshot.metricName} · ${snapshot.direction}` : '账本尚未写入'],
         ].map(([label, value]) => (
           <div key={label} style={{ background: colors.panel, border: `1px solid ${colors.line}`, borderRadius: 12, padding: 12 }}>
             <div style={{ color: colors.muted, fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</div>
@@ -504,51 +422,17 @@ function LabDashboard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | nul
 
 function OverlayRoot({ ctx }: { ctx: AnyCtx }) {
   const lab = useLab()
-  if (!lab.open) return null
+  if (!lab.overlayOpen) return null
   return (
-    <div style={{ position: 'fixed', inset: 0, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '8vh 16px 16px', pointerEvents: 'auto', background: 'rgba(0,0,0,0.42)', zIndex: 40 }}>
+    <div data-autoresearch="overlay" style={{ position: 'fixed', inset: 0, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '8vh 16px 16px', pointerEvents: 'auto', background: 'rgba(0,0,0,0.42)', zIndex: 40 }}>
       <div style={{ ...font, width: 'min(960px, 100%)', maxHeight: '84vh', overflow: 'auto', background: colors.bg, border: `1px solid ${colors.line}`, borderRadius: 16, padding: 20, boxShadow: '0 18px 60px rgba(0,0,0,0.45)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: colors.muted, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Autoresearch 实验室</div>
-          <LabButton onClick={closeLab}>关闭</LabButton>
+          <div style={{ fontSize: 12, color: colors.muted, letterSpacing: '0.08em', textTransform: 'uppercase' }}>更大视图</div>
+          <LabButton onClick={closeOverlay}>关闭</LabButton>
         </div>
-        {lab.page === 'create' ? <CreateForm ctx={ctx} sessionId={lab.sessionId} /> : null}
-        {lab.page === 'confirm' ? <ConfirmForm ctx={ctx} sessionId={lab.sessionId} /> : null}
-        {lab.page === 'lab' ? <LabDashboard ctx={ctx} sessionId={lab.sessionId} /> : null}
+        <LabDashboard ctx={ctx} sessionId={lab.sessionId} />
       </div>
     </div>
-  )
-}
-
-function InitEntry({ sessionId }: { sessionId: string }) {
-  const lab = useLab()
-  rememberSession(sessionId)
-  const running = lab.phase === 'running' || Boolean(lab.snapshot?.active)
-  const done = lab.phase === 'done' || ((lab.snapshot?.totalRuns ?? 0) > 0 && !running)
-  const label = running || done ? '打开实验室' : '新开 Autoresearch'
-  return (
-    <button
-      type="button"
-      data-autoresearch="init-entry"
-      title={label}
-      onClick={() => openLab(running || done ? 'lab' : 'create')}
-      style={{
-        ...font,
-        display: 'inline-flex',
-        alignItems: 'center',
-        height: 28,
-        padding: '0 8px',
-        background: 'transparent',
-        color: colors.text,
-        border: `1px solid ${colors.line}`,
-        borderRadius: 8,
-        cursor: 'pointer',
-        fontSize: 12,
-        whiteSpace: 'nowrap',
-      }}
-    >
-      {label}
-    </button>
   )
 }
 
@@ -558,7 +442,7 @@ function SettingsCard({ scope }: { scope: SettingsScope }) {
     <div style={{ ...font, display: 'grid', gap: 10, padding: 4 }}>
       <div>
         <div style={{ fontWeight: 700 }}>Autoresearch</div>
-        <div style={{ color: colors.muted, fontSize: 12, marginTop: 4 }}>项目级 `.auto/config.json` 优先于这里的默认值。循环不会出现在首页侧栏。</div>
+        <div style={{ color: colors.muted, fontSize: 12, marginTop: 4 }}>项目级 `.auto/config.json` 优先于这里的默认值。日常首页和 composer 不常驻实验入口；用 `/autoresearch` 打开引导卡。</div>
       </div>
       <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
         默认最大轮数（0 表示不在设置里封顶）
@@ -591,23 +475,22 @@ function SettingsCard({ scope }: { scope: SettingsScope }) {
 }
 
 export function apply(ctx: AnyCtx): void {
-  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-    name: 'shell.overlay',
-    id: 'autoresearch-overlay',
-    order: 40,
-    label: 'Autoresearch Lab',
-  }, () => <OverlayRoot ctx={ctx} />))
-
-  ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
-    name: 'conversation.input.left',
-    id: 'autoresearch-init',
-    order: 40,
-    label: '新开 Autoresearch',
+  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+    name: 'conversation.input.dock',
+    id: 'autoresearch',
+    order: 25,
     inject: (sessionId: string) => {
       rememberSession(sessionId)
       return { sessionId }
     },
-  }, (props: { sessionId: string }) => <InitEntry sessionId={props.sessionId} />))
+  }, (props: { sessionId: string }) => <AutoresearchDock ctx={ctx} sessionId={props.sessionId} />))
+
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+    name: 'shell.overlay',
+    id: 'autoresearch-overlay',
+    order: 40,
+    label: 'Autoresearch larger view',
+  }, () => <OverlayRoot ctx={ctx} />))
 
   const scope = ctx.settingsScope.bind({ namespace: 'autoresearch' })
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
@@ -621,8 +504,8 @@ export function apply(ctx: AnyCtx): void {
     ui: {
       kind: 'popupSelect',
       options: async () => ([
-        { id: 'start', label: '新开一次 Autoresearch', detail: '打开配置，确认后才执行' },
-        { id: 'lab', label: '打开实验室', detail: '专属过程 / 结果可视化' },
+        { id: 'start', label: '新开一次 Autoresearch', detail: '目标 + 轮次，确认后才执行' },
+        { id: 'expand', label: '打开更大视图', detail: '图表与完整轮次表；默认不挡输出' },
         { id: 'resume', label: '继续', detail: '/autoresearch resume' },
         { id: 'status', label: '状态', detail: '/autoresearch status' },
         { id: 'off', label: '停止续跑', detail: '/autoresearch off' },
@@ -631,16 +514,17 @@ export function apply(ctx: AnyCtx): void {
       onSelect: async (option, session) => {
         rememberSession(session.sessionId)
         if (option.id === 'start') {
-          openLab('create')
+          showInitDock()
           return
         }
-        if (option.id === 'lab') {
-          openLab('lab')
+        if (option.id === 'expand') {
+          showRunDock()
+          openOverlay()
           return
         }
         const line = option.id === 'resume' ? '/autoresearch resume' : `/autoresearch ${option.id}`
         await executeLine(ctx, session.sessionId, line)
-        if (option.id === 'resume' || option.id === 'status') openLab('lab')
+        if (option.id === 'resume' || option.id === 'status') showRunDock()
       },
     },
   })

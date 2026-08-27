@@ -6,12 +6,9 @@ English: [README.en.md](./README.en.md)
 
 ## 这不是普通聊天
 
-循环必须被**显式激活**。随便发一句 prompt 不会启动实验。只有：
+循环必须被**显式激活**。随便发一句 prompt 不会启动实验。日常首页和 composer 工具行**没有**实验入口。
 
-- `/autoresearch` → **新开一次 Autoresearch** → 配置 GUI 里确认并开始
-- composer 工具行 **新开 Autoresearch**（同样走进配置 GUI）
-
-才会把 `active` 设为 true。之后模型改代码、跑 `.auto/measure.sh`、调用 `autoresearch_log_experiment`。keep 会提交；discard / crash / checks_failed 会回滚代码但保留 `.auto/`。
+只有输入 `/autoresearch`（或斜杠菜单里选 **新开一次 Autoresearch**）会弹出输入框正上方的引导卡；点 **确认并开始** 才会把 `active` 设为 true。之后模型改代码、跑 `.auto/measure.sh`、调用 `autoresearch_log_experiment`。keep 会提交；discard / crash / checks_failed 会回滚代码但保留 `.auto/`。
 
 同会话自动续跑由 Host `agent.followup` 完成，直到 `maxIterations`、`/autoresearch off`、卡住或你打断。
 
@@ -50,17 +47,17 @@ dshx start web dsh-autoresearch
 
 ## 在 GUI 里怎么用
 
-首页**不会**常显「实验循环」。侧栏 footer 没有实验 chip。每次都要主动 init：
+首页和侧栏**不会**常显「实验循环」。composer 工具行也没有常驻「新开 Autoresearch」按钮。
 
 1. 打开官方 Web，进入一个会话（最好是干净的 git worktree）。
-2. 在输入框输入 `/autoresearch`，选 **新开一次 Autoresearch**；或点 composer 工具行里的 **新开 Autoresearch**。
-3. 配置 GUI 填写：问题、模型、轮次/预算、成功标准。点「下一步：确认参数」。
-4. 核对摘要后点 **确认并开始** 才会执行。
-5. 执行过程和结果在专属 **Autoresearch 实验室** overlay 里可视化（折线 + `.auto/log.jsonl` 表），不是钉在首页聊天里。关闭后可用「打开实验室」或 `/autoresearch` → 打开实验室再进来。
+2. 在输入框输入 `/autoresearch`，选 **新开一次 Autoresearch**。输入框正上方出现引导卡（不是全屏 overlay，不挡上面的 Agent 输出）。
+3. 卡上只填两件事：目标（自然语言，和 grok-autoresearch 的 `/autoresearch <goal>` 一样）和轮次。不要填主指标、方向、measure.sh。点 **确认并开始** 才会执行。
+4. 同一条 dock 变成跑中监视：第 N/M 轮、每一轮 keep/discard、账本里的活指标。Agent 消息在卡上方照常滚。
+5. 「打开更大视图」才是可选的全屏图/表；默认不挡输出。
 
-暂停续跑：实验室里的「暂停续跑」或 `/autoresearch off`。清除账本用实验室里的「清除账本」。
+暂停续跑：dock 上的「暂停续跑」或 `/autoresearch off`。清除账本用更大视图里的「清除账本」或 `/autoresearch clear`。
 
-斜杠 `/autoresearch` 裸调用会弹出：新开一次 / 打开实验室 / 继续 / 状态 / 停止 / 清除。
+斜杠 `/autoresearch` 会弹出：新开一次 / 打开更大视图 / 继续 / 状态 / 停止 / 清除。
 
 ## 账本
 

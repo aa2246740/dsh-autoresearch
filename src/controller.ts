@@ -491,7 +491,7 @@ export class AutoresearchController {
           "- /autoresearch resume - resume the persisted loop",
           "- /autoresearch off - stop automatic continuation",
           "- /autoresearch clear - delete the experiment log and stop",
-          "- /autoresearch export - open the Lab overlay in the official Web GUI",
+          "- /autoresearch export - open the larger monitor view in the official Web GUI",
           "",
           status.text,
         ].join("\n"),
@@ -515,7 +515,7 @@ export class AutoresearchController {
         ok: true,
         ...status,
         action: "export",
-        text: "Open the Autoresearch Lab overlay in the official DeepSeek Harness Web GUI to monitor the loop.",
+        text: "Open the Autoresearch monitor dock in the official DeepSeek Harness Web GUI. The larger overlay is optional and does not block Agent output by default.",
       };
     }
     if (command === "finalize") {

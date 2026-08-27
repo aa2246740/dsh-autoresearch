@@ -47,7 +47,6 @@ declare module '@deepseek-ai/dsh-client-runtime/client' {
 
 declare module '@deepseek-ai/dsh-client-ui-settings-plugins/client' {}
 declare module '@deepseek-ai/dsh-client-ui-conversation/client' {}
-declare module '@deepseek-ai/dsh-client-ui-sidebar/client' {}
 declare module '@deepseek-ai/dsh-client-ui-commands/client' {
   export interface SelectOption {
     id: string

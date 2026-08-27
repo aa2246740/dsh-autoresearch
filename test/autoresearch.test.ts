@@ -12,7 +12,17 @@ import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from 
 import { sessionFilePath } from '../src/paths.ts'
 import { evaluatePendingGuard } from '../src/guard.ts'
 import { CONTINUE_MARKER } from '../src/types.ts'
-import { buildStartLine, emptyDraft } from '../src/client/store.ts'
+import {
+  applyCommandText,
+  buildStartLine,
+  cancelInitDock,
+  emptyDraft,
+  getLabState,
+  parseRoundBudget,
+  resetLab,
+  showInitDock,
+  showRunDock,
+} from '../src/client/store.ts'
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
@@ -57,20 +67,110 @@ test('JSONL reconstruction ignores bad lines and derives segments from config he
   assert.deepEqual(state.results.map((run) => run.segment), [0, 1])
 })
 
-test('GUI start line stays inert until confirm and encodes budget plus success criterion', () => {
+test('opening the init dock does not activate the loop', () => {
+  resetLab()
+  assert.equal(getLabState().dock, 'hidden')
+  showInitDock()
+  const lab = getLabState()
+  assert.equal(lab.dock, 'init')
+  assert.equal(lab.phase, 'configuring')
+  assert.equal(lab.snapshot, null)
+  assert.equal(lab.overlayOpen, false)
+  cancelInitDock()
+  assert.equal(getLabState().dock, 'hidden')
+  assert.equal(getLabState().phase, 'idle')
+})
+
+test('GUI start line is only goal plus round budget, sent after confirm', () => {
   const line = buildStartLine({
     ...emptyDraft(),
     goal: 'drop errors in score.py',
-    success: 'errors = 0',
     maxRuns: '3',
-    metricName: 'errors',
-    direction: 'lower',
   })
-  assert.match(line, /^\/autoresearch /)
-  assert.match(line, /成功标准：errors = 0/)
-  assert.match(line, /for 3 runs/)
-  assert.match(line, /metric errors/)
+  assert.equal(line, '/autoresearch drop errors in score.py for 3 runs')
+  assert.doesNotMatch(line, /成功标准/)
+  assert.doesNotMatch(line, /metric /)
   assert.doesNotMatch(line, /allowNoGit/)
+  assert.doesNotMatch(line, /higher is better|lower is better/)
+  assert.equal(parseRoundBudget('3'), 3)
+  assert.equal(parseRoundBudget('0'), null)
+})
+
+test('init draft has no metric, direction, measure, or allowNoGit fields', () => {
+  const draft = emptyDraft()
+  assert.deepEqual(Object.keys(draft).sort(), ['goal', 'maxRuns'])
+  assert.equal('metricName' in draft, false)
+  assert.equal('direction' in draft, false)
+  assert.equal('allowNoGit' in draft, false)
+  assert.equal('success' in draft, false)
+  assert.doesNotMatch(JSON.stringify(draft), /gemini|google|minimax-cn|MINIMAXCN/i)
+})
+
+test('client daily chrome has no experiment chip and init form is goal+rounds', () => {
+  const source = fs.readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { dsh: { client: { inject: string[] } } }
+  assert.equal(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-sidebar'), false)
+  assert.equal(/slots\.inject\(\s*['"]sidebar/.test(source), false)
+  assert.equal(/slots\.inject\(\s*['"]shell\.sidebar/.test(source), false)
+  assert.equal(/slots\.inject\(\s*['"]shell\.footer/.test(source), false)
+  assert.equal(/conversation\.input\.left/.test(source), false)
+  assert.doesNotMatch(source, /实验循环/)
+  assert.doesNotMatch(source, /data-autoresearch="init-entry"/)
+  assert.match(source, /conversation\.input\.dock/)
+  assert.match(source, /data-autoresearch="init-card"/)
+  assert.match(source, /data-autoresearch-field="goal"/)
+  assert.match(source, /data-autoresearch-field="rounds"/)
+  assert.match(source, /确认并开始/)
+  assert.doesNotMatch(source, /data-autoresearch-field="metric"/)
+  assert.doesNotMatch(source, /data-autoresearch-field="direction"/)
+  const initCard = source.slice(source.indexOf('function InitDockCard'), source.indexOf('function currentRuns'))
+  assert.match(initCard, /确认并开始/)
+  assert.doesNotMatch(initCard, /主指标/)
+  assert.doesNotMatch(initCard, /metricName/)
+  assert.doesNotMatch(initCard, /direction/)
+  assert.doesNotMatch(initCard, /allowNoGit/)
+  assert.doesNotMatch(initCard, /成功标准/)
+  assert.doesNotMatch(initCard, /measure\.sh/)
+  assert.doesNotMatch(source, /minimax-cn/)
+  assert.doesNotMatch(source, /gemini|GEMINI|GOOGLE_API_KEY/i)
+  assert.doesNotMatch(source, /selectSessionModel|selectModel/)
+})
+
+test('status snapshots do not flip the hidden dock to init', () => {
+  resetLab()
+  const snapshot = {
+    cwd: '/tmp',
+    workDir: '/tmp',
+    active: false,
+    manualOff: false,
+    needsSetup: true,
+    pendingContinuation: false,
+    gitOk: true,
+    gitError: null,
+    allowNoGit: false,
+    name: null,
+    metricName: 'metric',
+    metricUnit: '',
+    direction: 'lower' as const,
+    maxIterations: 3,
+    maxAutoResumeTurns: 3,
+    currentSegmentRuns: 0,
+    totalRuns: 0,
+    baselineMetric: null,
+    bestKeptMetric: null,
+    lastStatus: null,
+    results: [],
+    promptExists: false,
+    measureExists: false,
+    checksExists: false,
+    updatedAt: 1,
+  }
+  applyCommandText(`idle\n\nAUTORESEARCH_STATE_V1 ${JSON.stringify(snapshot)}`)
+  assert.equal(getLabState().dock, 'hidden')
+  assert.equal(getLabState().snapshot?.active, false)
+  showRunDock()
+  assert.equal(getLabState().dock, 'run')
+  resetLab()
 })
 
 test('natural-language loop controls retain finite and unlimited Pi semantics', () => {
