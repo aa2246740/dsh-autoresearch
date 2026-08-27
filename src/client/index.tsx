@@ -145,10 +145,8 @@ function fieldStyle(): CSSProperties {
 }
 
 const FALLBACK_MODELS: ModelOption[] = [
-  { key: 'minimax-cn::MiniMax-M2.7', provider: 'minimax-cn', model: 'MiniMax-M2.7', label: 'MiniMax CN / MiniMax-M2.7' },
-  { key: 'minimax-cn::MiniMax-M3', provider: 'minimax-cn', model: 'MiniMax-M3', label: 'MiniMax CN / MiniMax-M3' },
-  { key: 'openrouter::minimax/minimax-m2.5', provider: 'openrouter', model: 'minimax/minimax-m2.5', label: 'OpenRouter / MiniMax M2.5' },
-  { key: 'openrouter::minimax/minimax-m2.7', provider: 'openrouter', model: 'minimax/minimax-m2.7', label: 'OpenRouter / MiniMax M2.7' },
+  { key: 'openrouter::minimax/minimax-m2.7:free', provider: 'openrouter', model: 'minimax/minimax-m2.7:free', label: 'OpenRouter / MiniMax M2.7 (free)' },
+  { key: 'openrouter::minimax/minimax-m3:free', provider: 'openrouter', model: 'minimax/minimax-m3:free', label: 'OpenRouter / MiniMax M3 (free)' },
   { key: 'zai-coding-cn::glm-4.5-air', provider: 'zai-coding-cn', model: 'glm-4.5-air', label: 'Z.AI Coding CN / GLM-4.5-Air' },
   { key: 'zai-coding-cn::glm-4.7', provider: 'zai-coding-cn', model: 'glm-4.7', label: 'Z.AI Coding CN / GLM-4.7' },
 ]

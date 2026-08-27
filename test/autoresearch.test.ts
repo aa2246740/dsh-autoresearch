@@ -57,6 +57,16 @@ test('JSONL reconstruction ignores bad lines and derives segments from config he
   assert.deepEqual(state.results.map((run) => run.segment), [0, 1])
 })
 
+test('GUI default draft prefers OpenRouter free MiniMax and never MiniMax CN', () => {
+  const draft = emptyDraft()
+  assert.equal(draft.provider, 'openrouter')
+  assert.equal(draft.model, 'minimax/minimax-m2.7:free')
+  assert.match(draft.modelLabel, /OpenRouter/)
+  assert.match(draft.modelLabel, /free/i)
+  assert.notEqual(draft.provider, 'minimax-cn')
+  assert.doesNotMatch(draft.model, /gemini/i)
+})
+
 test('GUI start line stays inert until confirm and encodes budget plus success criterion', () => {
   const line = buildStartLine({
     ...emptyDraft(),
@@ -378,4 +388,14 @@ test('host plugin source is a named apply without a default export', () => {
   assert.match(source, /\[dsh-autoresearch\] loaded/)
   assert.equal(/export\s+default\s+/.test(source), false)
   assert.equal(/append\?\.\(\['"]autoresearch\//.test(source), false)
+})
+
+test('client does not pin an experiment chip on the home sidebar', () => {
+  const source = fs.readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  assert.equal(/slots\.inject\(\s*['"]sidebar/.test(source), false)
+  assert.equal(/slots\.inject\(\s*['"]shell\.sidebar/.test(source), false)
+  assert.equal(/slots\.inject\(\s*['"]shell\.footer/.test(source), false)
+  assert.doesNotMatch(source, /实验循环/)
+  assert.match(source, /conversation\.input\.left/)
+  assert.match(source, /shell\.overlay/)
 })

@@ -17,9 +17,9 @@ export interface ExperimentDraft {
 
 export const emptyDraft = (): ExperimentDraft => ({
   goal: '',
-  provider: 'minimax-cn',
-  model: 'MiniMax-M2.7',
-  modelLabel: 'MiniMax CN / MiniMax-M2.7',
+  provider: 'openrouter',
+  model: 'minimax/minimax-m2.7:free',
+  modelLabel: 'OpenRouter / MiniMax M2.7 (free)',
   maxRuns: '3',
   metricName: 'errors',
   direction: 'lower',
