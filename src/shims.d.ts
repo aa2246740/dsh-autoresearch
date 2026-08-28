@@ -47,7 +47,6 @@ declare module '@deepseek-ai/dsh-client-runtime/client' {
 
 declare module '@deepseek-ai/dsh-client-ui-settings-plugins/client' {}
 declare module '@deepseek-ai/dsh-client-ui-conversation/client' {}
-declare module '@deepseek-ai/dsh-client-ui-sidebar/client' {}
 declare module '@deepseek-ai/dsh-client-ui-commands/client' {
   export interface SelectOption {
     id: string
@@ -65,5 +64,14 @@ declare module '@deepseek-ai/dsh-client-ui-commands/client' {
         onSelect: (option: SelectOption, session: { sessionId: string }) => void | Promise<void>
       }
     }) => () => void
+  }
+}
+
+declare module '@deepseek-ai/dsh-session-projection/types' {
+  interface SessionProjectionMap {
+    autoresearch: import('./types.ts').AutoresearchSnapshot | null
+  }
+  interface SessionProjectionStateMap {
+    autoresearch: import('./types.ts').AutoresearchSnapshot | null
   }
 }

@@ -93,6 +93,12 @@ export const STATE_MARKER = 'AUTORESEARCH_STATE_V1'
 export const CONTINUE_MARKER = 'AUTORESEARCH_CONTINUE'
 export const CONTINUATION_REQUIRED = 'AUTORESEARCH_CONTINUATION_REQUIRED'
 
+/** Drop undefined keys and non-finite numbers so tool results pass harness JSON snapshotting. */
+export function toJsonValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+/** Kept so old transcripts can still be parsed. New tool/command text must not use this. */
 export function embedState(text: string, snapshot: AutoresearchSnapshot): string {
   return `${text}\n\n${STATE_MARKER} ${JSON.stringify(snapshot)}`
 }

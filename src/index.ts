@@ -12,7 +12,8 @@ import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from 
 import { evaluatePendingGuard } from './guard.js'
 import { CONTINUE_PLAYBOOK, CREATE_PLAYBOOK, skillBodies } from './playbook.js'
 import { ensureParentDir, sessionFilePath } from './paths.js'
-import { embedState, type AutoresearchSnapshot, type ToolResult } from './types.js'
+import { autoresearchProjectionSchema, foldAutoresearchProjection } from './projection.js'
+import { toJsonValue, type AutoresearchSnapshot, type ToolResult } from './types.js'
 
 export const name = 'dsh-autoresearch'
 export const inject = ['tools']
@@ -56,11 +57,23 @@ function userMessage(text: string): { role: 'user'; content: Array<{ type: 'text
 }
 
 function withSnapshot(controller: AutoresearchController, result: { text?: string; [key: string]: unknown }): ToolResult {
-  const snapshot = controller.snapshot() as AutoresearchSnapshot
-  return {
+  const snapshot = toJsonValue(controller.snapshot() as AutoresearchSnapshot)
+  return toJsonValue({
     ...(result as unknown as ToolResult),
     snapshot,
-    text: embedState(String(result.text ?? ''), snapshot),
+    // Human text only. Snapshot rides presentationMeta so the GUI can update
+    // the dock without dumping the ledger JSON into the transcript.
+    text: String(result.text ?? ''),
+  })
+}
+
+function toolOutput() {
+  return {
+    schema: { type: 'json' },
+    render: (_args: unknown, value: ToolResult) => [{ type: 'text', text: value.text }],
+    presentationMeta: (_args: unknown, value: ToolResult) => (
+      value.snapshot ? { snapshot: value.snapshot } : {}
+    ),
   }
 }
 
@@ -119,10 +132,7 @@ export function apply(ctx: Context, config: Config): void {
     parameters: {
       args: { type: 'string', description: 'Raw /autoresearch arguments' },
     },
-    output: {
-      schema: { type: 'json' },
-      render: (_args: unknown, value: ToolResult) => [{ type: 'text', text: value.text }],
-    },
+    output: toolOutput(),
     async execute(args: { args?: string }, exec: { agent?: { followup?: (message: unknown) => void; session?: { header?: { cwd?: string }; append?: (type: string, data: unknown) => void } } }) {
       const controller = controllerFor(workspaceOf(exec.agent))
       const raw = String(args.args ?? '')
@@ -139,10 +149,7 @@ export function apply(ctx: Context, config: Config): void {
     name: 'autoresearch_status',
     description: 'Read durable autoresearch state for this workspace without activating it.',
     parameters: {},
-    output: {
-      schema: { type: 'json' },
-      render: (_args: unknown, value: ToolResult) => [{ type: 'text', text: value.text }],
-    },
+    output: toolOutput(),
     async execute(_args: unknown, exec: { agent?: { session?: { header?: { cwd?: string }; append?: (type: string, data: unknown) => void } } }) {
       const controller = controllerFor(workspaceOf(exec.agent))
       const result = withSnapshot(controller, await controller.status())
@@ -159,10 +166,7 @@ export function apply(ctx: Context, config: Config): void {
       metric_unit: { type: 'string', description: 'Optional unit' },
       direction: { type: 'string', enum: ['lower', 'higher'], description: 'Whether lower or higher is better' },
     },
-    output: {
-      schema: { type: 'json' },
-      render: (_args: unknown, value: ToolResult) => [{ type: 'text', text: value.text }],
-    },
+    output: toolOutput(),
     async execute(args: { name: string; metric_name: string; metric_unit?: string; direction?: string }, exec: { agent?: { session?: { header?: { cwd?: string }; append?: (type: string, data: unknown) => void } } }) {
       const controller = controllerFor(workspaceOf(exec.agent))
       const result = withSnapshot(controller, await controller.initExperiment(args))
@@ -178,10 +182,7 @@ export function apply(ctx: Context, config: Config): void {
       timeout_seconds: { type: 'number', description: 'Benchmark timeout in seconds' },
       checks_timeout_seconds: { type: 'number', description: 'Optional checks.sh timeout' },
     },
-    output: {
-      schema: { type: 'json' },
-      render: (_args: unknown, value: ToolResult) => [{ type: 'text', text: value.text }],
-    },
+    output: toolOutput(),
     async execute(args: { command: string; timeout_seconds?: number; checks_timeout_seconds?: number }, exec: { agent?: { session?: { header?: { cwd?: string } } }; signal?: AbortSignal }) {
       const controller = controllerFor(workspaceOf(exec.agent))
       return withSnapshot(controller, await controller.runExperiment({ ...args, signal: exec.signal } as never))
@@ -200,10 +201,7 @@ export function apply(ctx: Context, config: Config): void {
       asi: { type: 'json', required: true, description: 'Hypothesis and notes for the next iteration' },
       force: { type: 'boolean', description: 'Allow adding new secondary metrics' },
     },
-    output: {
-      schema: { type: 'json' },
-      render: (_args: unknown, value: ToolResult) => [{ type: 'text', text: value.text }],
-    },
+    output: toolOutput(),
     async execute(args: Record<string, unknown>, exec: {
       agent?: { followup?: (message: unknown) => void; session?: { header?: { cwd?: string }; append?: (type: string, data: unknown) => void } }
       concludeTurn?: () => void
@@ -225,10 +223,7 @@ export function apply(ctx: Context, config: Config): void {
     name: 'autoresearch_compaction_summary',
     description: 'Build a deterministic summary from .auto artifacts so the active loop can survive context compaction.',
     parameters: {},
-    output: {
-      schema: { type: 'json' },
-      render: (_args: unknown, value: ToolResult) => [{ type: 'text', text: value.text }],
-    },
+    output: toolOutput(),
     async execute(_args: unknown, exec: { agent?: { session?: { header?: { cwd?: string } } } }) {
       const controller = controllerFor(workspaceOf(exec.agent))
       const text = buildAutoresearchCompactionSummary(autoresearchSummaryPathsFor(controller.workDir()))
@@ -299,15 +294,16 @@ export function apply(ctx: Context, config: Config): void {
   ctx.inject(['sessionProjections'], (projectionCtx: Context) => {
     projectionCtx.sessionProjections.register({
       key: 'autoresearch',
+      stateSchema: autoresearchProjectionSchema,
       init: () => null,
       apply: (state: AutoresearchSnapshot | null, event: { type: string; data: unknown }) => {
-        // Session.append cannot mark out-of-repo types ignorable, so this plugin
-        // does not write autoresearch/* events. GUI state travels in command text.
-        if (event.type === 'autoresearch/state') return event.data
-        if (event.type === 'turn/start' && state && !state.active) return state
-        return state
+        return foldAutoresearchProjection(state, event)
       },
-      stateVersion: 1,
+      wire: {
+        viewSchema: autoresearchProjectionSchema,
+        view: (state: AutoresearchSnapshot | null) => state,
+      },
+      stateVersion: 3,
     })
   })
 }

@@ -6,12 +6,9 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin tha
 
 ## Activation boundary
 
-This is not ordinary chat. A random prompt must not start the loop. Only:
+This is not ordinary chat. A random prompt must not start the loop. The home page and composer tool row have **no** standing experiment control.
 
-- `/autoresearch` → **Start a new Autoresearch** → configure, then confirm
-- the composer tool-row **新开 Autoresearch** button (same config GUI)
-
-set `active` to true. After that the model edits code, runs `.auto/measure.sh`, and must call `autoresearch_log_experiment`. `keep` commits; `discard` / `crash` / `checks_failed` revert code and preserve `.auto/`. Process and results render in the dedicated Lab overlay, not as a home-page chip.
+Type `/autoresearch` (or pick **Start a new Autoresearch** in the slash menu) to open a reserved dock **above the composer**. Confirm is required before `active` becomes true. The init card has two fields: a natural-language goal (same as grok-autoresearch `/autoresearch <goal>`) and a round budget. After confirm the dock hides (or keeps one alignment line); there is no progress card while the agent clarifies the goal. The first `run_experiment` shows `running…`; the first `log_experiment` shows one pi-TUI card (Runs / kept / Baseline / Progress Δ% / table). There is no larger-view overlay. Agent output stays visible above the dock.
 
 Same-session auto-resume uses Host `agent.followup` until `maxIterations`, `/autoresearch off`, a stuck state, or an interrupt.
 

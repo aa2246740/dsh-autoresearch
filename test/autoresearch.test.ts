@@ -11,8 +11,27 @@ import { appendHookLogEntryIfConfigured, runHook } from '../src/hooks.ts'
 import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from '../src/compaction.ts'
 import { sessionFilePath } from '../src/paths.ts'
 import { evaluatePendingGuard } from '../src/guard.ts'
-import { CONTINUE_MARKER } from '../src/types.ts'
-import { buildStartLine, emptyDraft } from '../src/client/store.ts'
+import { CONTINUE_MARKER, toJsonValue } from '../src/types.ts'
+import { foldAutoresearchProjection, preferLedgerSnapshot } from '../src/projection.ts'
+import {
+  applyCommandText,
+  buildStartLine,
+  cancelInitDock,
+  emptyDraft,
+  getLabState,
+  hideAfterConfirm,
+  parseRoundBudget,
+  resetLab,
+  showInitDock,
+} from '../src/client/store.ts'
+import {
+  buildDashboardModel,
+  formatNum,
+  inspectConversation,
+  progressCardKind,
+  sampleRun,
+} from '../src/client/dashboard.ts'
+import type { AutoresearchSnapshot } from '../src/types.ts'
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
@@ -57,20 +76,342 @@ test('JSONL reconstruction ignores bad lines and derives segments from config he
   assert.deepEqual(state.results.map((run) => run.segment), [0, 1])
 })
 
-test('GUI start line stays inert until confirm and encodes budget plus success criterion', () => {
+function emptySnapshot(overrides: Partial<AutoresearchSnapshot> = {}): AutoresearchSnapshot {
+  return {
+    cwd: '/tmp',
+    workDir: '/tmp',
+    active: false,
+    manualOff: false,
+    needsSetup: true,
+    pendingContinuation: false,
+    gitOk: true,
+    gitError: null,
+    allowNoGit: false,
+    name: null,
+    metricName: 'metric',
+    metricUnit: '',
+    direction: 'lower',
+    maxIterations: 3,
+    maxAutoResumeTurns: 3,
+    currentSegmentRuns: 0,
+    totalRuns: 0,
+    baselineMetric: null,
+    bestKeptMetric: null,
+    lastStatus: null,
+    results: [],
+    promptExists: false,
+    measureExists: false,
+    checksExists: false,
+    updatedAt: 1,
+    ...overrides,
+  }
+}
+
+test('opening the init dock does not activate the loop', () => {
+  resetLab()
+  assert.equal(getLabState().dock, 'hidden')
+  showInitDock()
+  const lab = getLabState()
+  assert.equal(lab.dock, 'init')
+  assert.equal(lab.phase, 'configuring')
+  assert.equal(lab.snapshot, null)
+  cancelInitDock()
+  assert.equal(getLabState().dock, 'hidden')
+  assert.equal(getLabState().phase, 'idle')
+})
+
+test('confirm hides the init card and does not open a progress dock', () => {
+  resetLab()
+  showInitDock()
+  hideAfterConfirm()
+  const lab = getLabState()
+  assert.equal(lab.dock, 'waiting')
+  assert.equal(lab.phase, 'idle')
+  assert.notEqual(lab.dock, 'init')
+  assert.equal(progressCardKind({ results: lab.snapshot?.results, runningExperiment: false }), 'none')
+})
+
+test('GUI start line is only goal plus round budget, sent after confirm', () => {
   const line = buildStartLine({
     ...emptyDraft(),
     goal: 'drop errors in score.py',
-    success: 'errors = 0',
     maxRuns: '3',
-    metricName: 'errors',
-    direction: 'lower',
   })
-  assert.match(line, /^\/autoresearch /)
-  assert.match(line, /成功标准：errors = 0/)
-  assert.match(line, /for 3 runs/)
-  assert.match(line, /metric errors/)
+  assert.equal(line, '/autoresearch drop errors in score.py for 3 runs')
+  assert.doesNotMatch(line, /成功标准/)
+  assert.doesNotMatch(line, /metric /)
   assert.doesNotMatch(line, /allowNoGit/)
+  assert.doesNotMatch(line, /higher is better|lower is better/)
+  assert.equal(parseRoundBudget('3'), 3)
+  assert.equal(parseRoundBudget('0'), null)
+})
+
+test('init draft has no metric, direction, measure, or allowNoGit fields', () => {
+  const draft = emptyDraft()
+  assert.deepEqual(Object.keys(draft).sort(), ['goal', 'maxRuns'])
+  assert.equal('metricName' in draft, false)
+  assert.equal('direction' in draft, false)
+  assert.equal('allowNoGit' in draft, false)
+  assert.equal('success' in draft, false)
+  assert.doesNotMatch(JSON.stringify(draft), /gemini|google|minimax-cn|MINIMAXCN/i)
+})
+
+test('status snapshots do not open a progress dock', () => {
+  resetLab()
+  applyCommandText(`idle\n\nAUTORESEARCH_STATE_V1 ${JSON.stringify(emptySnapshot({ active: false }))}`)
+  assert.equal(getLabState().dock, 'hidden')
+  assert.equal(getLabState().snapshot?.active, false)
+  applyCommandText(`active\n\nAUTORESEARCH_STATE_V1 ${JSON.stringify(emptySnapshot({ active: true, needsSetup: true }))}`)
+  assert.equal(getLabState().dock, 'hidden')
+  assert.equal(progressCardKind({ results: [], runningExperiment: false }), 'none')
+})
+
+test('progress card kind waits for run then log, not init or confirm', () => {
+  assert.equal(progressCardKind({ results: [], runningExperiment: false, hasRunStarted: false }), 'none')
+  assert.equal(progressCardKind({ results: [], runningExperiment: true }), 'running')
+  assert.equal(progressCardKind({ results: [], hasRunStarted: true }), 'running')
+  assert.equal(progressCardKind({
+    results: [sampleRun({ run: 1, metric: 10, status: 'keep' })],
+    runningExperiment: true,
+  }), 'board')
+})
+
+test('inspectConversation hides the board until log_experiment, even after init', () => {
+  const initOnly = inspectConversation({
+    runningCalls: [],
+    nodes: [{
+      kind: 'tool-result',
+      call: { name: 'autoresearch_init_experiment' },
+      meta: { snapshot: emptySnapshot({ name: 'tiny', metricName: 'score', active: true }) },
+    }],
+  })
+  assert.equal(initOnly.kind, 'none')
+
+  const running = inspectConversation({
+    runningCalls: [{ name: 'autoresearch_run_experiment', argsRaw: '{"command":"bash .auto/measure.sh"}' }],
+    nodes: [{
+      kind: 'tool-result',
+      call: { name: 'autoresearch_init_experiment' },
+      meta: { snapshot: emptySnapshot({ name: 'tiny', metricName: 'score', active: true }) },
+    }],
+  })
+  assert.equal(running.kind, 'running')
+  assert.equal(running.runningCommand, 'bash .auto/measure.sh')
+
+  const logged = inspectConversation({
+    runningCalls: [],
+    nodes: [{
+      kind: 'tool-result',
+      call: { name: 'autoresearch_log_experiment' },
+      meta: {
+        snapshot: emptySnapshot({
+          name: 'tiny',
+          metricName: 'score',
+          results: [
+            sampleRun({ run: 1, commit: 'abc1234', metric: 10, status: 'keep', description: 'baseline', metrics: { latency_ms: 5 } }),
+            sampleRun({ run: 2, commit: 'def5678', metric: 8, status: 'keep', description: 'faster', metrics: { latency_ms: 4 } }),
+            sampleRun({ run: 3, metric: 12, status: 'discard', description: 'worse' }),
+          ],
+          totalRuns: 3,
+          currentSegmentRuns: 3,
+          baselineMetric: 10,
+          bestKeptMetric: 8,
+        }),
+      },
+    }],
+  })
+  assert.equal(logged.kind, 'board')
+  const board = buildDashboardModel(logged.snapshot!)
+  assert.equal(board.title, 'autoresearch: tiny')
+  assert.equal(board.runs, 3)
+  assert.equal(board.kept, 2)
+  assert.equal(board.discarded, 1)
+  assert.equal(board.baseline?.value, '10')
+  assert.equal(board.progress?.value, '8')
+  assert.equal(board.progress?.deltaPct, -20)
+  assert.equal(board.progress?.improved, true)
+  assert.match(board.rows.map((row) => row.status).join(','), /discard/)
+})
+
+test('inspectConversation uses the longest log_experiment snapshot, not the last walked node', () => {
+  const first = emptySnapshot({
+    name: 'tiny',
+    metricName: 'score',
+    results: [sampleRun({ run: 1, metric: 10, status: 'keep', description: 'baseline' })],
+    updatedAt: 1,
+  })
+  const later = emptySnapshot({
+    name: 'tiny',
+    metricName: 'score',
+    results: [
+      sampleRun({ run: 1, metric: 10, status: 'keep', description: 'baseline' }),
+      sampleRun({ run: 2, metric: 8, status: 'keep', description: 'better' }),
+      sampleRun({ run: 3, metric: 12, status: 'discard', description: 'worse' }),
+    ],
+    updatedAt: 2,
+  })
+  const nestedLater = inspectConversation({
+    runningCalls: [],
+    nodes: [
+      { kind: 'tool-result', call: { name: 'autoresearch_log_experiment' }, meta: { snapshot: first } },
+      { kind: 'assistant', blocks: [
+        { kind: 'tool-result', call: { name: 'autoresearch_log_experiment' }, meta: { snapshot: later } },
+      ] },
+    ],
+  })
+  assert.equal(nestedLater.kind, 'board')
+  assert.equal(nestedLater.snapshot?.results.length, 3)
+  assert.equal(buildDashboardModel(nestedLater.snapshot!).discarded, 1)
+
+  const shorterChild = inspectConversation({
+    runningCalls: [],
+    nodes: [{
+      kind: 'tool-result',
+      call: { name: 'autoresearch_log_experiment' },
+      meta: { snapshot: later },
+      extra: { kind: 'tool-result', call: { name: 'autoresearch_log_experiment' }, meta: { snapshot: first } },
+    }],
+  })
+  assert.equal(shorterChild.snapshot?.results.length, 3)
+})
+
+test('inspectConversation treats Logged # text as log_experiment when the call head is truncated', () => {
+  const later = emptySnapshot({
+    name: 'tiny',
+    metricName: 'score',
+    results: [
+      sampleRun({ run: 1, metric: 10, status: 'keep' }),
+      sampleRun({ run: 2, metric: 8, status: 'keep' }),
+      sampleRun({ run: 3, metric: 12, status: 'discard' }),
+    ],
+  })
+  const seen = inspectConversation({
+    runningCalls: [],
+    nodes: [{
+      kind: 'tool-result',
+      call: null,
+      content: [{ type: 'text', text: 'Logged #3: discard - worse' }],
+      meta: { snapshot: later },
+    }],
+  })
+  assert.equal(seen.kind, 'board')
+  assert.equal(seen.snapshot?.results.length, 3)
+  assert.equal(buildDashboardModel(seen.snapshot!).discarded, 1)
+})
+
+test('status and init tool results never open the progress board', () => {
+  const leftover = emptySnapshot({
+    name: 'old',
+    metricName: 'score',
+    results: [
+      sampleRun({ run: 1, metric: 10, status: 'keep' }),
+      sampleRun({ run: 2, metric: 12, status: 'discard' }),
+    ],
+  })
+  const statusOnly = inspectConversation({
+    runningCalls: [],
+    nodes: [{
+      kind: 'tool-result',
+      call: { name: 'autoresearch_status' },
+      meta: { snapshot: leftover },
+    }],
+  })
+  assert.equal(statusOnly.kind, 'none')
+  assert.equal(statusOnly.snapshot, null)
+
+  const runWithLeftover = inspectConversation({
+    runningCalls: [{ name: 'autoresearch_run_experiment', argsRaw: '{"command":"bash .auto/measure.sh"}' }],
+    nodes: [{
+      kind: 'tool-result',
+      call: { name: 'autoresearch_status' },
+      meta: { snapshot: leftover },
+    }],
+  })
+  assert.equal(runWithLeftover.kind, 'running')
+  assert.equal(runWithLeftover.snapshot, null)
+})
+
+test('projection fold keeps the longer ledger from later tool results', () => {
+  const first = emptySnapshot({
+    results: [sampleRun({ run: 1, metric: 10, status: 'keep' })],
+  })
+  const later = emptySnapshot({
+    results: [
+      sampleRun({ run: 1, metric: 10, status: 'keep' }),
+      sampleRun({ run: 2, metric: 8, status: 'keep' }),
+      sampleRun({ run: 3, metric: 12, status: 'discard' }),
+    ],
+  })
+  const afterFirst = foldAutoresearchProjection(null, { type: 'tool/result', data: { meta: { snapshot: first } } })
+  const afterLater = foldAutoresearchProjection(afterFirst, { type: 'tool/result', data: { meta: { snapshot: later } } })
+  assert.equal(afterLater?.results.length, 3)
+  const ignoredShrink = foldAutoresearchProjection(afterLater, { type: 'tool/result', data: { meta: { snapshot: first } } })
+  assert.equal(ignoredShrink?.results.length, 3)
+  assert.equal(ignoredShrink, afterLater)
+  assert.equal(preferLedgerSnapshot(first, later)?.results.length, 3)
+  assert.equal(preferLedgerSnapshot(null, later), null)
+  const namedFirst = emptySnapshot({ name: 'tiny', results: first.results })
+  assert.equal(preferLedgerSnapshot(namedFirst, emptySnapshot({ name: 'other', results: later.results }))?.name, 'tiny')
+})
+
+test('formatNum glues short units and spaces longer ones', () => {
+  assert.equal(formatNum(2, 'ms'), '2ms')
+  assert.equal(formatNum(2, 'count'), '2 count')
+  assert.equal(formatNum(8.5, ''), '8.50')
+})
+
+test('client daily chrome has no experiment chip and init form is goal+rounds', () => {
+  const source = fs.readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { dsh: { client: { inject: string[] } } }
+  assert.equal(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-sidebar'), false)
+  assert.equal(/slots\.inject\(\s*['"]sidebar/.test(source), false)
+  assert.equal(/slots\.inject\(\s*['"]shell\.sidebar/.test(source), false)
+  assert.equal(/slots\.inject\(\s*['"]shell\.footer/.test(source), false)
+  assert.equal(/conversation\.input\.left/.test(source), false)
+  assert.doesNotMatch(source, /实验循环/)
+  assert.doesNotMatch(source, /data-autoresearch="init-entry"/)
+  assert.match(source, /conversation\.input\.dock/)
+  assert.match(source, /data-autoresearch="init-card"/)
+  assert.match(source, /data-autoresearch-field="goal"/)
+  assert.match(source, /data-autoresearch-field="rounds"/)
+  assert.match(source, /确认并开始/)
+  assert.doesNotMatch(source, /data-autoresearch-field="metric"/)
+  assert.doesNotMatch(source, /data-autoresearch-field="direction"/)
+  const initCard = source.slice(source.indexOf('function InitDockCard'), source.indexOf('function WaitingCard'))
+  assert.match(initCard, /确认并开始/)
+  assert.doesNotMatch(initCard, /主指标/)
+  assert.doesNotMatch(initCard, /metricName/)
+  assert.doesNotMatch(initCard, /direction/)
+  assert.doesNotMatch(initCard, /allowNoGit/)
+  assert.doesNotMatch(initCard, /成功标准/)
+  assert.doesNotMatch(initCard, /measure\.sh/)
+  assert.doesNotMatch(source, /minimax-cn/)
+  assert.doesNotMatch(source, /gemini|GEMINI|GOOGLE_API_KEY/i)
+  assert.doesNotMatch(source, /selectSessionModel|selectModel/)
+})
+
+test('GUI drops overlay, status polling, and STATE_V1 chat dumps', () => {
+  const source = fs.readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  const host = fs.readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /打开更大视图/)
+  assert.doesNotMatch(source, /OverlayRoot/)
+  assert.doesNotMatch(source, /Sparkline/)
+  assert.doesNotMatch(source, /shell\.overlay/)
+  assert.doesNotMatch(source, /id: 'expand'/)
+  assert.doesNotMatch(source, /showRunDock/)
+  assert.doesNotMatch(source, /setInterval/)
+  assert.doesNotMatch(source, /window\.setInterval/)
+  assert.doesNotMatch(source, /executeLine\(ctx, sessionId, '\/autoresearch status'\)/)
+  assert.match(source, /hideAfterConfirm/)
+  assert.match(source, /running…/)
+  assert.match(source, /等 agent 在对话里对齐需求/)
+  assert.match(source, /data-autoresearch="progress-card"/)
+  assert.doesNotMatch(host, /embedState\(/)
+  assert.match(host, /presentationMeta/)
+  assert.doesNotMatch(host, /AUTORESEARCH_STATE_V1/)
+  assert.match(host, /stateSchema/)
+  assert.match(host, /viewSchema/)
+  assert.match(host, /wire:/)
 })
 
 test('natural-language loop controls retain finite and unlimited Pi semantics', () => {
@@ -378,4 +719,18 @@ test('host plugin source is a named apply without a default export', () => {
   assert.match(source, /\[dsh-autoresearch\] loaded/)
   assert.equal(/export\s+default\s+/.test(source), false)
   assert.equal(/append\?\.\(\['"]autoresearch\//.test(source), false)
+  assert.match(source, /toJsonValue/)
+})
+
+test('tool payloads drop undefined keys so harness JSON snapshotting succeeds', () => {
+  const cleaned = toJsonValue({
+    ok: true,
+    text: 'Benchmark passed',
+    details: { command: 'bash .auto/measure.sh', truncation: undefined, parsedPrimary: 2 },
+  })
+  assert.deepEqual(cleaned, {
+    ok: true,
+    text: 'Benchmark passed',
+    details: { command: 'bash .auto/measure.sh', parsedPrimary: 2 },
+  })
 })
