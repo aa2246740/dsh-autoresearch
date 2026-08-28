@@ -1,6 +1,6 @@
 import { parseEmbeddedState, type AutoresearchSnapshot } from '../types.js'
 
-export type DockMode = 'hidden' | 'init' | 'run'
+export type DockMode = 'hidden' | 'init' | 'waiting'
 export type LabPage = 'create' | 'lab'
 export type LabPhase = 'idle' | 'configuring' | 'running' | 'done'
 
@@ -16,10 +16,8 @@ export const emptyDraft = (): ExperimentDraft => ({
 })
 
 export interface LabState {
-  /** Reserved composer dock: hidden on the daily home, init or run after `/autoresearch`. */
+  /** Reserved composer dock: hidden on the daily home; init before confirm; waiting is at most one alignment line. */
   dock: DockMode
-  /** Optional larger view. Default off so Agent output stays visible. */
-  overlayOpen: boolean
   page: LabPage
   phase: LabPhase
   sessionId: string | null
@@ -32,7 +30,6 @@ export interface LabState {
 
 const initial: LabState = {
   dock: 'hidden',
-  overlayOpen: false,
   page: 'create',
   phase: 'idle',
   sessionId: null,
@@ -73,7 +70,6 @@ export function resetLab(): void {
 export function showInitDock(): void {
   patchLab({
     dock: 'init',
-    overlayOpen: false,
     page: 'create',
     phase: 'configuring',
     draft: emptyDraft(),
@@ -82,30 +78,24 @@ export function showInitDock(): void {
   })
 }
 
-/** Same reserved dock, run-monitor state. Overlay stays closed unless asked. */
-export function showRunDock(): void {
-  const running = state.snapshot?.active === true
-  const done = (state.snapshot?.totalRuns ?? 0) > 0 && !running
+/**
+ * After 「确认并开始」: send the slash line, then leave the progress UI closed.
+ * The agent may still ask about requirements; the board appears only after run/log.
+ */
+export function hideAfterConfirm(): void {
   patchLab({
-    dock: 'run',
-    page: 'lab',
-    phase: running ? 'running' : done ? 'done' : state.phase === 'configuring' ? 'running' : state.phase,
+    dock: 'waiting',
+    page: 'create',
+    phase: 'idle',
+    busy: false,
     error: null,
   })
 }
 
-export function openOverlay(): void {
-  patchLab({ overlayOpen: true, page: 'lab', error: null })
-}
-
-export function closeOverlay(): void {
-  patchLab({ overlayOpen: false })
-}
-
-/** Hide the init dock. Running monitor stays up (长显). */
+/** Hide the init/waiting dock. Progress cards are conversation-driven and ignore this. */
 export function cancelInitDock(): void {
-  if (state.dock === 'run' || state.phase === 'running') return
-  patchLab({ dock: 'hidden', overlayOpen: false, page: 'create', phase: 'idle', error: null })
+  if (state.dock !== 'init' && state.dock !== 'waiting') return
+  patchLab({ dock: 'hidden', page: 'create', phase: 'idle', error: null })
 }
 
 export function rememberSession(sessionId: string): void {
@@ -113,29 +103,20 @@ export function rememberSession(sessionId: string): void {
   patchLab({ sessionId })
 }
 
+/**
+ * Legacy parser for old logs that still carry AUTORESEARCH_STATE_V1.
+ * Must not open a progress dock — confirm/status/init snapshots stay off the board.
+ */
 export function applyCommandText(text: string): AutoresearchSnapshot | undefined {
   const parsed = parseEmbeddedState(text)
   if (parsed.snapshot) {
-    const active = parsed.snapshot.active
-    const hasRuns = (parsed.snapshot.totalRuns ?? 0) > 0
-    const phase: LabPhase = active ? 'running' : hasRuns ? 'done' : state.phase === 'configuring' ? 'configuring' : 'idle'
-    const dock: DockMode = state.dock === 'init' && !active ? 'init' : (active || hasRuns || state.dock === 'run' ? 'run' : state.dock)
     patchLab({
       snapshot: parsed.snapshot,
       error: null,
       notice: parsed.text,
-      phase,
-      dock,
-      page: dock === 'run' ? 'lab' : state.page,
     })
   }
   return parsed.snapshot
-}
-
-export function formatMetric(snapshot: AutoresearchSnapshot | null, value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
-  const unit = snapshot?.metricUnit ?? ''
-  return `${Number.isInteger(value) ? String(value) : value.toFixed(3)}${unit}`
 }
 
 export function parseRoundBudget(raw: string): number | null {

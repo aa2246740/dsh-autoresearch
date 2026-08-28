@@ -52,12 +52,12 @@ dshx start web dsh-autoresearch
 1. 打开官方 Web，进入一个会话（最好是干净的 git worktree）。
 2. 在输入框输入 `/autoresearch`，选 **新开一次 Autoresearch**。输入框正上方出现引导卡（不是全屏 overlay，不挡上面的 Agent 输出）。
 3. 卡上只填两件事：目标（自然语言，和 grok-autoresearch 的 `/autoresearch <goal>` 一样）和轮次。不要填主指标、方向、measure.sh。点 **确认并开始** 才会执行。
-4. 同一条 dock 变成跑中监视：第 N/M 轮、每一轮 keep/discard、账本里的活指标。Agent 消息在卡上方照常滚。
-5. 「打开更大视图」才是可选的全屏图/表；默认不挡输出。
+4. 确认后 dock 收起（最多留一句「等 agent 在对话里对齐需求」）。此时没有进度卡；agent 可以先在对话里对齐需求。
+5. 第一次 `run_experiment` 才出现一行 `running…`。第一次 `log_experiment` 入账后出现一张人话进度卡（Runs / kept / discarded / Baseline / Progress Δ% / 短表）。没有第二层「更大视图」。
 
-暂停续跑：dock 上的「暂停续跑」或 `/autoresearch off`。清除账本用更大视图里的「清除账本」或 `/autoresearch clear`。
+暂停续跑：进度卡上的「暂停」或 `/autoresearch off`。清除账本用 `/autoresearch clear`。
 
-斜杠 `/autoresearch` 会弹出：新开一次 / 打开更大视图 / 继续 / 状态 / 停止 / 清除。
+斜杠 `/autoresearch` 会弹出：新开一次 / 继续 / 状态 / 停止 / 清除。进度卡从对话里的 run/log 工具更新，不会把账本 JSON 写进聊天。
 
 ## 账本
 

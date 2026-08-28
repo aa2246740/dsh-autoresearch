@@ -18,11 +18,18 @@ import {
   cancelInitDock,
   emptyDraft,
   getLabState,
+  hideAfterConfirm,
   parseRoundBudget,
   resetLab,
   showInitDock,
-  showRunDock,
 } from '../src/client/store.ts'
+import {
+  buildDashboardModel,
+  inspectConversation,
+  progressCardKind,
+  sampleRun,
+} from '../src/client/dashboard.ts'
+import type { AutoresearchSnapshot } from '../src/types.ts'
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
@@ -67,6 +74,37 @@ test('JSONL reconstruction ignores bad lines and derives segments from config he
   assert.deepEqual(state.results.map((run) => run.segment), [0, 1])
 })
 
+function emptySnapshot(overrides: Partial<AutoresearchSnapshot> = {}): AutoresearchSnapshot {
+  return {
+    cwd: '/tmp',
+    workDir: '/tmp',
+    active: false,
+    manualOff: false,
+    needsSetup: true,
+    pendingContinuation: false,
+    gitOk: true,
+    gitError: null,
+    allowNoGit: false,
+    name: null,
+    metricName: 'metric',
+    metricUnit: '',
+    direction: 'lower',
+    maxIterations: 3,
+    maxAutoResumeTurns: 3,
+    currentSegmentRuns: 0,
+    totalRuns: 0,
+    baselineMetric: null,
+    bestKeptMetric: null,
+    lastStatus: null,
+    results: [],
+    promptExists: false,
+    measureExists: false,
+    checksExists: false,
+    updatedAt: 1,
+    ...overrides,
+  }
+}
+
 test('opening the init dock does not activate the loop', () => {
   resetLab()
   assert.equal(getLabState().dock, 'hidden')
@@ -75,10 +113,20 @@ test('opening the init dock does not activate the loop', () => {
   assert.equal(lab.dock, 'init')
   assert.equal(lab.phase, 'configuring')
   assert.equal(lab.snapshot, null)
-  assert.equal(lab.overlayOpen, false)
   cancelInitDock()
   assert.equal(getLabState().dock, 'hidden')
   assert.equal(getLabState().phase, 'idle')
+})
+
+test('confirm hides the init card and does not open a progress dock', () => {
+  resetLab()
+  showInitDock()
+  hideAfterConfirm()
+  const lab = getLabState()
+  assert.equal(lab.dock, 'waiting')
+  assert.equal(lab.phase, 'idle')
+  assert.notEqual(lab.dock, 'init')
+  assert.equal(progressCardKind({ results: lab.snapshot?.results, runningExperiment: false }), 'none')
 })
 
 test('GUI start line is only goal plus round budget, sent after confirm', () => {
@@ -106,6 +154,83 @@ test('init draft has no metric, direction, measure, or allowNoGit fields', () =>
   assert.doesNotMatch(JSON.stringify(draft), /gemini|google|minimax-cn|MINIMAXCN/i)
 })
 
+test('status snapshots do not open a progress dock', () => {
+  resetLab()
+  applyCommandText(`idle\n\nAUTORESEARCH_STATE_V1 ${JSON.stringify(emptySnapshot({ active: false }))}`)
+  assert.equal(getLabState().dock, 'hidden')
+  assert.equal(getLabState().snapshot?.active, false)
+  applyCommandText(`active\n\nAUTORESEARCH_STATE_V1 ${JSON.stringify(emptySnapshot({ active: true, needsSetup: true }))}`)
+  assert.equal(getLabState().dock, 'hidden')
+  assert.equal(progressCardKind({ results: [], runningExperiment: false }), 'none')
+})
+
+test('progress card kind waits for run then log, not init or confirm', () => {
+  assert.equal(progressCardKind({ results: [], runningExperiment: false, hasRunStarted: false }), 'none')
+  assert.equal(progressCardKind({ results: [], runningExperiment: true }), 'running')
+  assert.equal(progressCardKind({ results: [], hasRunStarted: true }), 'running')
+  assert.equal(progressCardKind({
+    results: [sampleRun({ run: 1, metric: 10, status: 'keep' })],
+    runningExperiment: true,
+  }), 'board')
+})
+
+test('inspectConversation hides the board until log_experiment, even after init', () => {
+  const initOnly = inspectConversation({
+    runningCalls: [],
+    nodes: [{
+      kind: 'tool-result',
+      call: { name: 'autoresearch_init_experiment' },
+      meta: { snapshot: emptySnapshot({ name: 'tiny', metricName: 'score', active: true }) },
+    }],
+  })
+  assert.equal(initOnly.kind, 'none')
+
+  const running = inspectConversation({
+    runningCalls: [{ name: 'autoresearch_run_experiment', argsRaw: '{"command":"bash .auto/measure.sh"}' }],
+    nodes: [{
+      kind: 'tool-result',
+      call: { name: 'autoresearch_init_experiment' },
+      meta: { snapshot: emptySnapshot({ name: 'tiny', metricName: 'score', active: true }) },
+    }],
+  })
+  assert.equal(running.kind, 'running')
+  assert.equal(running.runningCommand, 'bash .auto/measure.sh')
+
+  const logged = inspectConversation({
+    runningCalls: [],
+    nodes: [{
+      kind: 'tool-result',
+      call: { name: 'autoresearch_log_experiment' },
+      meta: {
+        snapshot: emptySnapshot({
+          name: 'tiny',
+          metricName: 'score',
+          results: [
+            sampleRun({ run: 1, commit: 'abc1234', metric: 10, status: 'keep', description: 'baseline', metrics: { latency_ms: 5 } }),
+            sampleRun({ run: 2, commit: 'def5678', metric: 8, status: 'keep', description: 'faster', metrics: { latency_ms: 4 } }),
+            sampleRun({ run: 3, metric: 12, status: 'discard', description: 'worse' }),
+          ],
+          totalRuns: 3,
+          currentSegmentRuns: 3,
+          baselineMetric: 10,
+          bestKeptMetric: 8,
+        }),
+      },
+    }],
+  })
+  assert.equal(logged.kind, 'board')
+  const board = buildDashboardModel(logged.snapshot!)
+  assert.equal(board.title, 'autoresearch: tiny')
+  assert.equal(board.runs, 3)
+  assert.equal(board.kept, 2)
+  assert.equal(board.discarded, 1)
+  assert.equal(board.baseline?.value, '10')
+  assert.equal(board.progress?.value, '8')
+  assert.equal(board.progress?.deltaPct, -20)
+  assert.equal(board.progress?.improved, true)
+  assert.match(board.rows.map((row) => row.status).join(','), /discard/)
+})
+
 test('client daily chrome has no experiment chip and init form is goal+rounds', () => {
   const source = fs.readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { dsh: { client: { inject: string[] } } }
@@ -123,7 +248,7 @@ test('client daily chrome has no experiment chip and init form is goal+rounds', 
   assert.match(source, /确认并开始/)
   assert.doesNotMatch(source, /data-autoresearch-field="metric"/)
   assert.doesNotMatch(source, /data-autoresearch-field="direction"/)
-  const initCard = source.slice(source.indexOf('function InitDockCard'), source.indexOf('function currentRuns'))
+  const initCard = source.slice(source.indexOf('function InitDockCard'), source.indexOf('function WaitingCard'))
   assert.match(initCard, /确认并开始/)
   assert.doesNotMatch(initCard, /主指标/)
   assert.doesNotMatch(initCard, /metricName/)
@@ -136,41 +261,25 @@ test('client daily chrome has no experiment chip and init form is goal+rounds', 
   assert.doesNotMatch(source, /selectSessionModel|selectModel/)
 })
 
-test('status snapshots do not flip the hidden dock to init', () => {
-  resetLab()
-  const snapshot = {
-    cwd: '/tmp',
-    workDir: '/tmp',
-    active: false,
-    manualOff: false,
-    needsSetup: true,
-    pendingContinuation: false,
-    gitOk: true,
-    gitError: null,
-    allowNoGit: false,
-    name: null,
-    metricName: 'metric',
-    metricUnit: '',
-    direction: 'lower' as const,
-    maxIterations: 3,
-    maxAutoResumeTurns: 3,
-    currentSegmentRuns: 0,
-    totalRuns: 0,
-    baselineMetric: null,
-    bestKeptMetric: null,
-    lastStatus: null,
-    results: [],
-    promptExists: false,
-    measureExists: false,
-    checksExists: false,
-    updatedAt: 1,
-  }
-  applyCommandText(`idle\n\nAUTORESEARCH_STATE_V1 ${JSON.stringify(snapshot)}`)
-  assert.equal(getLabState().dock, 'hidden')
-  assert.equal(getLabState().snapshot?.active, false)
-  showRunDock()
-  assert.equal(getLabState().dock, 'run')
-  resetLab()
+test('GUI drops overlay, status polling, and STATE_V1 chat dumps', () => {
+  const source = fs.readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  const host = fs.readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /打开更大视图/)
+  assert.doesNotMatch(source, /OverlayRoot/)
+  assert.doesNotMatch(source, /Sparkline/)
+  assert.doesNotMatch(source, /shell\.overlay/)
+  assert.doesNotMatch(source, /id: 'expand'/)
+  assert.doesNotMatch(source, /showRunDock/)
+  assert.doesNotMatch(source, /setInterval/)
+  assert.doesNotMatch(source, /window\.setInterval/)
+  assert.doesNotMatch(source, /executeLine\(ctx, sessionId, '\/autoresearch status'\)/)
+  assert.match(source, /hideAfterConfirm/)
+  assert.match(source, /running…/)
+  assert.match(source, /等 agent 在对话里对齐需求/)
+  assert.match(source, /data-autoresearch="progress-card"/)
+  assert.doesNotMatch(host, /embedState\(/)
+  assert.match(host, /presentationMeta/)
+  assert.doesNotMatch(host, /AUTORESEARCH_STATE_V1/)
 })
 
 test('natural-language loop controls retain finite and unlimited Pi semantics', () => {

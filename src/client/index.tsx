@@ -1,25 +1,29 @@
-import { useEffect, useState, useSyncExternalStore, type CSSProperties, type FormEvent } from 'react'
+import { useState, useSyncExternalStore, type CSSProperties, type FormEvent } from 'react'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-commands/client'
 import type { CommandUiContract } from '@deepseek-ai/dsh-client-ui-commands/client'
-import type { ExperimentRun } from '../types.js'
+import type { ExperimentStatus } from '../types.js'
 import { parseEmbeddedState } from '../types.js'
+import {
+  buildDashboardModel,
+  formatDeltaPct,
+  inspectConversation,
+  type ConversationInspectInput,
+  type DashboardModel,
+} from './dashboard.js'
 import {
   applyCommandText,
   buildStartLine,
   cancelInitDock,
-  closeOverlay,
-  formatMetric,
-  getLabState,
-  openOverlay,
+  hideAfterConfirm,
   parseRoundBudget,
   patchLab,
   rememberSession,
   showInitDock,
-  showRunDock,
   subscribeLab,
+  getLabState,
   type ExperimentDraft,
 } from './store.js'
 
@@ -32,6 +36,8 @@ export const inject = [
   'settingsScope',
   'commandUi',
 ]
+
+type ConversationSelector = <T>(selector: (snapshot: ConversationInspectInput) => T) => T
 
 type AnyCtx = ClientContext & {
   slots: {
@@ -56,6 +62,12 @@ interface RemoteAnswer {
 interface SettingsScope {
   value: Record<string, unknown>
   set: (field: string, value: unknown) => Promise<void> | void
+}
+
+interface DockProps {
+  sessionId: string
+  useSession?: ConversationSelector
+  session?: ConversationInspectInput
 }
 
 const colors = {
@@ -87,6 +99,10 @@ const dockShell: CSSProperties = {
   padding: '10px 12px',
 }
 
+const mono: CSSProperties = {
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+}
+
 function useLab() {
   return useSyncExternalStore(subscribeLab, getLabState, getLabState)
 }
@@ -103,7 +119,7 @@ async function executeLine(ctx: AnyCtx, sessionId: string, line: string): Promis
   return text
 }
 
-function statusColor(status: ExperimentRun['status']): string {
+function statusColor(status: ExperimentStatus): string {
   if (status === 'keep') return colors.good
   if (status === 'discard') return colors.warn
   return colors.bad
@@ -140,33 +156,22 @@ function fieldStyle(): CSSProperties {
   return { ...font, background: colors.bg, border: `1px solid ${colors.line}`, borderRadius: 8, padding: 8 }
 }
 
-function Sparkline({ runs, direction }: { runs: ExperimentRun[]; direction: 'lower' | 'higher' }) {
-  const points = runs.filter((run) => Number.isFinite(run.metric))
-  if (points.length === 0) {
-    return <div style={{ color: colors.muted, fontSize: 13 }}>还没有可绘制的指标。确认开始后，轮次会出现在这里。</div>
-  }
-  const values = points.map((run) => run.metric)
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const span = max - min || 1
-  const w = 640
-  const h = 180
-  const d = points.map((run, index) => {
-    const x = points.length === 1 ? w / 2 : (index / (points.length - 1)) * (w - 24) + 12
-    const y = h - 16 - ((run.metric - min) / span) * (h - 32)
-    return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
-  }).join(' ')
+function Spinner() {
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} width="100%" height="180" role="img" aria-label="metric chart">
-      <rect x="0" y="0" width={w} height={h} fill="transparent" />
-      <path d={d} fill="none" stroke={colors.accent} strokeWidth="2.5" />
-      {points.map((run, index) => {
-        const x = points.length === 1 ? w / 2 : (index / (points.length - 1)) * (w - 24) + 12
-        const y = h - 16 - ((run.metric - min) / span) * (h - 32)
-        return <circle key={run.run} cx={x} cy={y} r="3.5" fill={statusColor(run.status)} />
-      })}
-      <text x="12" y="14" fill={colors.muted} fontSize="11">{direction === 'lower' ? '越低越好' : '越高越好'}</text>
-    </svg>
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'inline-block',
+        width: 10,
+        height: 10,
+        marginRight: 6,
+        border: `2px solid ${colors.line}`,
+        borderTopColor: colors.warn,
+        borderRadius: '50%',
+        animation: 'dsh-ar-spin 0.8s linear infinite',
+        verticalAlign: 'middle',
+      }}
+    />
   )
 }
 
@@ -191,7 +196,7 @@ function InitDockCard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | nul
     patchLab({ draft, busy: true, error: null })
     try {
       await executeLine(ctx, sessionId, buildStartLine(draft))
-      patchLab({ dock: 'run', page: 'lab', phase: 'running', overlayOpen: false, busy: false })
+      hideAfterConfirm()
     } catch (error) {
       patchLab({ busy: false, error: error instanceof Error ? error.message : String(error) })
     }
@@ -243,197 +248,179 @@ function InitDockCard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | nul
   )
 }
 
-function currentRuns(snapshot: ReturnType<typeof getLabState>['snapshot']): ExperimentRun[] {
-  if (!snapshot) return []
-  const last = snapshot.results.at(-1)?.segment
-  return snapshot.results.filter((run) => run.segment === last || run.segment === 0)
+function WaitingCard() {
+  return (
+    <div data-autoresearch="waiting-card" style={{ color: colors.muted, fontSize: 13 }}>
+      等 agent 在对话里对齐需求
+    </div>
+  )
 }
 
-function RunDockCard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | null }) {
-  const lab = useLab()
-  const snapshot = lab.snapshot
-  const running = lab.phase === 'running' || Boolean(snapshot?.active)
-  const budget = snapshot?.maxIterations ?? parseRoundBudget(lab.draft.maxRuns) ?? 3
-  const round = snapshot?.currentSegmentRuns ?? 0
-  const runs = currentRuns(snapshot)
-  const latest = runs.at(-1)
-  const metricName = snapshot?.metricName && snapshot.metricName !== 'metric' ? snapshot.metricName : null
-  const liveValue = latest?.metric ?? snapshot?.bestKeptMetric ?? snapshot?.baselineMetric ?? null
+function RunningCard({ name, command }: { name: string | null; command: string | null }) {
+  return (
+    <div data-autoresearch="running-card" style={{ ...mono, fontSize: 13, color: colors.text }}>
+      <style>{'@keyframes dsh-ar-spin { to { transform: rotate(360deg); } }'}</style>
+      <Spinner />
+      <span style={{ color: colors.warn }}>running…</span>
+      {name ? <span style={{ color: colors.muted }}>{` │ ${name}`}</span> : null}
+      {command ? <span style={{ color: colors.muted }}>{` │ ${command}`}</span> : null}
+      <span style={{ color: colors.muted }}> │ waiting for first logged result</span>
+    </div>
+  )
+}
 
-  useEffect(() => {
-    if (!sessionId) return
-    let cancelled = false
-    const tick = () => {
-      void executeLine(ctx, sessionId, '/autoresearch status').catch((error: unknown) => {
-        if (!cancelled) patchLab({ error: error instanceof Error ? error.message : String(error) })
-      })
-    }
-    tick()
-    const id = window.setInterval(tick, 2000)
-    return () => {
-      cancelled = true
-      window.clearInterval(id)
-    }
-  }, [ctx, sessionId])
+function ProgressCard({
+  model,
+  ctx,
+  sessionId,
+}: {
+  model: DashboardModel
+  ctx: AnyCtx
+  sessionId: string | null
+}) {
+  const lab = useLab()
+  const progressDelta = formatDeltaPct(model.progress?.deltaPct ?? null)
+  const deltaTone = model.progress?.improved === true ? colors.good : model.progress?.improved === false ? colors.bad : colors.muted
 
   return (
-    <div data-autoresearch="run-card" style={{ display: 'grid', gap: 8 }}>
+    <div data-autoresearch="progress-card" style={{ display: 'grid', gap: 8, fontSize: 13 }}>
+      <style>{'@keyframes dsh-ar-spin { to { transform: rotate(360deg); } }'}</style>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>
-          第 {round} / {budget} 轮
-          <span style={{ color: colors.muted, fontWeight: 400 }}>
-            {' · '}
-            {running ? '执行中' : snapshot?.manualOff ? '已暂停' : lab.phase === 'done' ? '已结束' : '监视'}
-          </span>
-        </div>
-        <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13 }}>
-          {metricName ? `${metricName} ${formatMetric(snapshot, liveValue)}` : '等待账本指标'}
-        </div>
+        <div data-autoresearch="progress-title" style={{ fontSize: 13, fontWeight: 600 }}>{model.title}</div>
+        {model.paused ? <span style={{ color: colors.warn, fontSize: 12 }}>paused</span> : null}
       </div>
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', minHeight: 22 }}>
-        {runs.length === 0 ? (
-          <span style={{ color: colors.muted, fontSize: 12 }}>
-            {running ? '正在跑第一轮。keep / discard 会写在这里。' : '还没有实验记录。'}
-          </span>
-        ) : runs.map((run) => (
-          <span
-            key={run.run}
-            data-autoresearch-run={run.run}
-            data-autoresearch-status={run.status}
-            style={{
-              fontSize: 12,
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-              color: statusColor(run.status),
-              border: `1px solid ${statusColor(run.status)}`,
-              borderRadius: 999,
-              padding: '1px 8px',
-            }}
-          >
-            #{run.run} {run.status}
-          </span>
-        ))}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline' }}>
+        <span>Runs {model.runs}</span>
+        <span data-autoresearch="kept" style={{ color: colors.good }}>{model.kept} kept</span>
+        {model.conf !== null ? (
+          <span data-autoresearch="conf" style={{ color: colors.muted }}>{`(conf: ${model.conf.toFixed(1)}×)`}</span>
+        ) : null}
+        {model.discarded > 0 ? (
+          <span data-autoresearch="discarded" style={{ color: colors.warn }}>{model.discarded} discarded</span>
+        ) : null}
+        {model.crashed > 0 ? (
+          <span style={{ color: colors.bad }}>{model.crashed} crashed</span>
+        ) : null}
+        {model.checksFailed > 0 ? (
+          <span style={{ color: colors.bad }}>{model.checksFailed} checks failed</span>
+        ) : null}
       </div>
-      {lab.error ? <div style={{ color: colors.bad, fontSize: 12, whiteSpace: 'pre-wrap' }}>{lab.error}</div> : null}
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-        <LabButton disabled={!sessionId || lab.busy} onClick={() => sessionId && void executeLine(ctx, sessionId, '/autoresearch off')}>暂停续跑</LabButton>
-        <LabButton onClick={openOverlay}>打开更大视图</LabButton>
-      </div>
-    </div>
-  )
-}
-
-function AutoresearchDock({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string }) {
-  const lab = useLab()
-  rememberSession(sessionId)
-  if (lab.dock === 'hidden') return null
-  return (
-    <div data-autoresearch="dock" style={dockShell}>
-      {lab.dock === 'init' ? <InitDockCard ctx={ctx} sessionId={sessionId} /> : <RunDockCard ctx={ctx} sessionId={sessionId} />}
-    </div>
-  )
-}
-
-function LabDashboard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | null }) {
-  const lab = useLab()
-  const snapshot = lab.snapshot
-  const running = lab.phase === 'running' || Boolean(snapshot?.active)
-  const current = currentRuns(snapshot)
-
-  useEffect(() => {
-    if (!sessionId) return
-    let cancelled = false
-    const tick = () => {
-      void executeLine(ctx, sessionId, '/autoresearch status').catch((error: unknown) => {
-        if (!cancelled) patchLab({ error: error instanceof Error ? error.message : String(error) })
-      })
-    }
-    tick()
-    const id = window.setInterval(tick, 2000)
-    return () => {
-      cancelled = true
-      window.clearInterval(id)
-    }
-  }, [ctx, sessionId])
-
-  return (
-    <div style={{ display: 'grid', gap: 14 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-        <div>
-          <div style={{ fontSize: 20, fontWeight: 700 }}>{snapshot?.name ?? '实验监视'}</div>
-          <div style={{ color: colors.muted, fontSize: 13, marginTop: 4 }}>
-            {running ? '执行中' : snapshot?.manualOff ? '已暂停自动续跑' : lab.phase === 'done' ? '本轮已结束' : '未激活'}
-            {snapshot?.pendingContinuation ? ' · 等待同会话续跑' : ''}
-          </div>
+      {model.baseline ? (
+        <div data-autoresearch="baseline" style={{ color: colors.muted }}>
+          Baseline ★ {model.metricName}: {model.baseline.value} #{model.baseline.run}
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <LabButton onClick={() => { showInitDock() }}>新开一次</LabButton>
-          <LabButton disabled={!sessionId || lab.busy} onClick={() => sessionId && void executeLine(ctx, sessionId, '/autoresearch off')}>暂停续跑</LabButton>
-          <LabButton kind="danger" disabled={!sessionId || lab.busy} onClick={() => sessionId && void executeLine(ctx, sessionId, '/autoresearch clear')}>清除账本</LabButton>
-        </div>
-      </div>
-      {!snapshot?.gitOk && snapshot?.gitError ? (
-        <div style={{ border: `1px solid ${colors.bad}`, borderRadius: 10, padding: 10, color: colors.bad, fontSize: 13 }}>{snapshot.gitError}</div>
       ) : null}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
-        {[
-          ['基线', formatMetric(snapshot, snapshot?.baselineMetric ?? null)],
-          ['最佳 keep', formatMetric(snapshot, snapshot?.bestKeptMetric ?? null)],
-          ['本段轮次', `${snapshot?.currentSegmentRuns ?? 0} / ${snapshot?.maxIterations ?? parseRoundBudget(lab.draft.maxRuns) ?? '—'}`],
-          ['主指标', snapshot && snapshot.metricName !== 'metric' ? `${snapshot.metricName} · ${snapshot.direction}` : '账本尚未写入'],
-        ].map(([label, value]) => (
-          <div key={label} style={{ background: colors.panel, border: `1px solid ${colors.line}`, borderRadius: 12, padding: 12 }}>
-            <div style={{ color: colors.muted, fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</div>
-            <div style={{ marginTop: 8, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 22, fontWeight: 700 }}>{value}</div>
-          </div>
-        ))}
-      </div>
-      <div style={{ background: colors.panel, border: `1px solid ${colors.line}`, borderRadius: 12, padding: 10 }}>
-        <Sparkline runs={current} direction={snapshot?.direction ?? 'lower'} />
-      </div>
+      {model.progress ? (
+        <div data-autoresearch="progress-best">
+          <span style={{ color: colors.muted }}>Progress </span>
+          <span style={{ color: colors.warn, fontWeight: 600 }}>
+            ★ {model.metricName}: {model.progress.value}
+          </span>
+          <span style={{ color: colors.muted }}>{` #${model.progress.run}`}</span>
+          {progressDelta ? (
+            <span data-autoresearch="delta" style={{ color: deltaTone }}>
+              {` ${progressDelta}`}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {model.secondaries.length > 0 ? (
+        <div style={{ color: colors.muted, fontSize: 12 }}>
+          {model.secondaries.map((item) => {
+            const delta = formatDeltaPct(item.deltaPct)
+            return (
+              <span key={item.name} style={{ marginRight: 10 }}>
+                {item.name}: {item.value}
+                {delta ? ` ${delta}` : ''}
+              </span>
+            )
+          })}
+        </div>
+      ) : null}
       <div style={{ overflow: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, ...mono }}>
           <thead>
             <tr style={{ color: colors.muted, textAlign: 'left' }}>
-              {['#', '状态', '指标', '假设', '提交'].map((head) => (
-                <th key={head} style={{ padding: '8px 6px', borderBottom: `1px solid ${colors.line}`, fontWeight: 500 }}>{head}</th>
+              {['#', 'commit', `★ ${model.metricName}`, 'status', 'description'].map((head) => (
+                <th key={head} style={{ padding: '4px 6px', borderBottom: `1px solid ${colors.line}`, fontWeight: 500 }}>{head}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {(snapshot?.results ?? []).length === 0 ? (
-              <tr><td colSpan={5} style={{ padding: 16, color: colors.muted }}>{running ? '正在跑第一轮。结果写入 `.auto/log.jsonl` 后会出现在这张表里。' : '还没有实验记录。确认开始后才会执行。'}</td></tr>
-            ) : snapshot!.results.map((run) => (
-              <tr key={run.run}>
-                <td style={{ padding: '8px 6px', borderBottom: `1px solid ${colors.line}`, fontFamily: 'ui-monospace, monospace' }}>{run.run}</td>
-                <td style={{ padding: '8px 6px', borderBottom: `1px solid ${colors.line}`, color: statusColor(run.status) }}>{run.status}</td>
-                <td style={{ padding: '8px 6px', borderBottom: `1px solid ${colors.line}`, fontFamily: 'ui-monospace, monospace' }}>{formatMetric(snapshot, run.metric)}</td>
-                <td style={{ padding: '8px 6px', borderBottom: `1px solid ${colors.line}` }}>{run.asi?.hypothesis || run.description || '—'}</td>
-                <td style={{ padding: '8px 6px', borderBottom: `1px solid ${colors.line}`, fontFamily: 'ui-monospace, monospace' }}>{run.commit || '—'}</td>
+            {model.rows.map((row) => (
+              <tr key={row.run} data-autoresearch-run={row.run} data-autoresearch-status={row.status}>
+                <td style={{ padding: '4px 6px', borderBottom: `1px solid ${colors.line}` }}>{row.run}</td>
+                <td style={{ padding: '4px 6px', borderBottom: `1px solid ${colors.line}` }}>{row.commit}</td>
+                <td style={{ padding: '4px 6px', borderBottom: `1px solid ${colors.line}` }}>{row.metric}</td>
+                <td style={{ padding: '4px 6px', borderBottom: `1px solid ${colors.line}`, color: statusColor(row.status) }}>{row.status}</td>
+                <td style={{ padding: '4px 6px', borderBottom: `1px solid ${colors.line}`, fontFamily: font.fontFamily }}>{row.description}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      {lab.error ? <div style={{ color: colors.bad, fontSize: 13, whiteSpace: 'pre-wrap' }}>{lab.error}</div> : null}
-      {lab.notice ? <pre style={{ ...font, whiteSpace: 'pre-wrap', color: colors.muted, fontSize: 12, margin: 0 }}>{lab.notice}</pre> : null}
+      {model.running ? (
+        <div data-autoresearch="running-line" style={{ ...mono, color: colors.warn, fontSize: 12 }}>
+          <Spinner />
+          running…{model.runningCommand ? ` ${model.runningCommand}` : ''}
+        </div>
+      ) : null}
+      {lab.error ? <div style={{ color: colors.bad, fontSize: 12, whiteSpace: 'pre-wrap' }}>{lab.error}</div> : null}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <LabButton disabled={!sessionId || lab.busy} onClick={() => sessionId && void executeLine(ctx, sessionId, '/autoresearch off')}>暂停</LabButton>
+      </div>
     </div>
   )
 }
 
-function OverlayRoot({ ctx }: { ctx: AnyCtx }) {
+function AutoresearchDock({ ctx, sessionId, useSession, session }: DockProps & { ctx: AnyCtx }) {
   const lab = useLab()
-  if (!lab.overlayOpen) return null
-  return (
-    <div data-autoresearch="overlay" style={{ position: 'fixed', inset: 0, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '8vh 16px 16px', pointerEvents: 'auto', background: 'rgba(0,0,0,0.42)', zIndex: 40 }}>
-      <div style={{ ...font, width: 'min(960px, 100%)', maxHeight: '84vh', overflow: 'auto', background: colors.bg, border: `1px solid ${colors.line}`, borderRadius: 16, padding: 20, boxShadow: '0 18px 60px rgba(0,0,0,0.45)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: colors.muted, letterSpacing: '0.08em', textTransform: 'uppercase' }}>更大视图</div>
-          <LabButton onClick={closeOverlay}>关闭</LabButton>
-        </div>
-        <LabDashboard ctx={ctx} sessionId={lab.sessionId} />
+  rememberSession(sessionId)
+  const runningCalls = useSession
+    ? useSession((snapshot) => snapshot.runningCalls ?? [])
+    : (session?.runningCalls ?? [])
+  const nodes = useSession
+    ? useSession((snapshot) => snapshot.nodes ?? [])
+    : (session?.nodes ?? [])
+  const progress = inspectConversation({ runningCalls, nodes })
+
+  if (lab.dock === 'init') {
+    return (
+      <div data-autoresearch="dock" style={dockShell}>
+        <InitDockCard ctx={ctx} sessionId={sessionId} />
       </div>
-    </div>
-  )
+    )
+  }
+
+  if (progress.kind === 'board' && progress.snapshot) {
+    const model = buildDashboardModel(progress.snapshot, {
+      running: progress.runningExperiment,
+      runningCommand: progress.runningCommand,
+    })
+    return (
+      <div data-autoresearch="dock" style={dockShell}>
+        <ProgressCard model={model} ctx={ctx} sessionId={sessionId} />
+      </div>
+    )
+  }
+
+  if (progress.kind === 'running') {
+    return (
+      <div data-autoresearch="dock" style={dockShell}>
+        <RunningCard name={progress.snapshot?.name ?? null} command={progress.runningCommand} />
+      </div>
+    )
+  }
+
+  if (lab.dock === 'waiting') {
+    return (
+      <div data-autoresearch="dock" style={dockShell}>
+        <WaitingCard />
+      </div>
+    )
+  }
+
+  return null
 }
 
 function SettingsCard({ scope }: { scope: SettingsScope }) {
@@ -479,18 +466,7 @@ export function apply(ctx: AnyCtx): void {
     name: 'conversation.input.dock',
     id: 'autoresearch',
     order: 25,
-    inject: (sessionId: string) => {
-      rememberSession(sessionId)
-      return { sessionId }
-    },
-  }, (props: { sessionId: string }) => <AutoresearchDock ctx={ctx} sessionId={props.sessionId} />))
-
-  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-    name: 'shell.overlay',
-    id: 'autoresearch-overlay',
-    order: 40,
-    label: 'Autoresearch larger view',
-  }, () => <OverlayRoot ctx={ctx} />))
+  }, (props: DockProps) => <AutoresearchDock ctx={ctx} {...props} />))
 
   const scope = ctx.settingsScope.bind({ namespace: 'autoresearch' })
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
@@ -505,7 +481,6 @@ export function apply(ctx: AnyCtx): void {
       kind: 'popupSelect',
       options: async () => ([
         { id: 'start', label: '新开一次 Autoresearch', detail: '目标 + 轮次，确认后才执行' },
-        { id: 'expand', label: '打开更大视图', detail: '图表与完整轮次表；默认不挡输出' },
         { id: 'resume', label: '继续', detail: '/autoresearch resume' },
         { id: 'status', label: '状态', detail: '/autoresearch status' },
         { id: 'off', label: '停止续跑', detail: '/autoresearch off' },
@@ -517,14 +492,8 @@ export function apply(ctx: AnyCtx): void {
           showInitDock()
           return
         }
-        if (option.id === 'expand') {
-          showRunDock()
-          openOverlay()
-          return
-        }
         const line = option.id === 'resume' ? '/autoresearch resume' : `/autoresearch ${option.id}`
         await executeLine(ctx, session.sessionId, line)
-        if (option.id === 'resume' || option.id === 'status') showRunDock()
       },
     },
   })
