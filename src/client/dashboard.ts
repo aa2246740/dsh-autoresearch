@@ -1,5 +1,6 @@
 import { parseEmbeddedState, type AutoresearchSnapshot } from '../types.js'
 import type { ExperimentRun, ExperimentStatus, MetricDirection } from '../jsonl.js'
+import { longerSnapshot } from '../projection.js'
 
 export type ProgressCardKind = 'none' | 'running' | 'board'
 
@@ -298,10 +299,19 @@ function conversationNodes(conv: ConversationInspectInput | Record<string, unkno
   return out
 }
 
+function isRunExperimentName(name: string): boolean {
+  return name === RUN_TOOL || name.endsWith('run_experiment')
+}
+
+function isLogExperimentNode(node: Record<string, unknown>, name: string): boolean {
+  if (name === LOG_TOOL || name.endsWith('log_experiment')) return true
+  return node.kind === 'tool-result' && /Logged #\d+/.test(textFromContent(node.content))
+}
+
 /**
  * Progress comes from this conversation's run/log tools, not from /autoresearch status.
  * init_experiment alone (empty ledger) stays kind 'none'.
- * Later log_experiment snapshots replace earlier ones so discard/Δ% show up.
+ * Longer log_experiment snapshots win, including when a shorter one is nested later.
  */
 export function inspectConversation(conv: ConversationInspectInput | null | undefined): ConversationProgress {
   const runningCalls = conv?.runningCalls ?? []
@@ -311,22 +321,18 @@ export function inspectConversation(conv: ConversationInspectInput | null | unde
 
   let hasRunStarted = runningExperiment
   let logSnapshot: AutoresearchSnapshot | null = null
-  let anySnapshot: AutoresearchSnapshot | null = null
 
   walkNodes(conversationNodes(conv), (node) => {
     const name = toolNameOf(node)
     const isResult = node.kind === 'tool-result' || name.startsWith('autoresearch_')
-    if (!isResult && name !== RUN_TOOL && name !== LOG_TOOL) return
-    if (name === RUN_TOOL) hasRunStarted = true
+    if (!isResult && !isRunExperimentName(name) && !isLogExperimentNode(node, name)) return
+    if (isRunExperimentName(name)) hasRunStarted = true
     const snapshot = snapshotFromNode(node)
-    if (!snapshot) return
-    anySnapshot = snapshot
-    if (name === LOG_TOOL || name.endsWith('log_experiment')) {
-      logSnapshot = snapshot
+    if (snapshot && isLogExperimentNode(node, name)) {
+      logSnapshot = longerSnapshot(logSnapshot, snapshot)
     }
   })
 
-  const snapshot = logSnapshot ?? anySnapshot
   const kind = progressCardKind({
     results: logSnapshot?.results,
     runningExperiment,
@@ -335,7 +341,7 @@ export function inspectConversation(conv: ConversationInspectInput | null | unde
 
   return {
     kind,
-    snapshot,
+    snapshot: logSnapshot,
     runningCommand,
     hasRunStarted,
     runningExperiment,

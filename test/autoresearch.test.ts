@@ -233,11 +233,12 @@ test('inspectConversation hides the board until log_experiment, even after init'
   assert.match(board.rows.map((row) => row.status).join(','), /discard/)
 })
 
-test('inspectConversation uses the latest log_experiment snapshot, not the first', () => {
+test('inspectConversation uses the longest log_experiment snapshot, not the last walked node', () => {
   const first = emptySnapshot({
     name: 'tiny',
     metricName: 'score',
     results: [sampleRun({ run: 1, metric: 10, status: 'keep', description: 'baseline' })],
+    updatedAt: 1,
   })
   const later = emptySnapshot({
     name: 'tiny',
@@ -247,8 +248,9 @@ test('inspectConversation uses the latest log_experiment snapshot, not the first
       sampleRun({ run: 2, metric: 8, status: 'keep', description: 'better' }),
       sampleRun({ run: 3, metric: 12, status: 'discard', description: 'worse' }),
     ],
+    updatedAt: 2,
   })
-  const seen = inspectConversation({
+  const nestedLater = inspectConversation({
     runningCalls: [],
     nodes: [
       { kind: 'tool-result', call: { name: 'autoresearch_log_experiment' }, meta: { snapshot: first } },
@@ -257,9 +259,76 @@ test('inspectConversation uses the latest log_experiment snapshot, not the first
       ] },
     ],
   })
+  assert.equal(nestedLater.kind, 'board')
+  assert.equal(nestedLater.snapshot?.results.length, 3)
+  assert.equal(buildDashboardModel(nestedLater.snapshot!).discarded, 1)
+
+  const shorterChild = inspectConversation({
+    runningCalls: [],
+    nodes: [{
+      kind: 'tool-result',
+      call: { name: 'autoresearch_log_experiment' },
+      meta: { snapshot: later },
+      extra: { kind: 'tool-result', call: { name: 'autoresearch_log_experiment' }, meta: { snapshot: first } },
+    }],
+  })
+  assert.equal(shorterChild.snapshot?.results.length, 3)
+})
+
+test('inspectConversation treats Logged # text as log_experiment when the call head is truncated', () => {
+  const later = emptySnapshot({
+    name: 'tiny',
+    metricName: 'score',
+    results: [
+      sampleRun({ run: 1, metric: 10, status: 'keep' }),
+      sampleRun({ run: 2, metric: 8, status: 'keep' }),
+      sampleRun({ run: 3, metric: 12, status: 'discard' }),
+    ],
+  })
+  const seen = inspectConversation({
+    runningCalls: [],
+    nodes: [{
+      kind: 'tool-result',
+      call: null,
+      content: [{ type: 'text', text: 'Logged #3: discard - worse' }],
+      meta: { snapshot: later },
+    }],
+  })
   assert.equal(seen.kind, 'board')
   assert.equal(seen.snapshot?.results.length, 3)
   assert.equal(buildDashboardModel(seen.snapshot!).discarded, 1)
+})
+
+test('status and init tool results never open the progress board', () => {
+  const leftover = emptySnapshot({
+    name: 'old',
+    metricName: 'score',
+    results: [
+      sampleRun({ run: 1, metric: 10, status: 'keep' }),
+      sampleRun({ run: 2, metric: 12, status: 'discard' }),
+    ],
+  })
+  const statusOnly = inspectConversation({
+    runningCalls: [],
+    nodes: [{
+      kind: 'tool-result',
+      call: { name: 'autoresearch_status' },
+      meta: { snapshot: leftover },
+    }],
+  })
+  assert.equal(statusOnly.kind, 'none')
+  assert.equal(statusOnly.snapshot, null)
+
+  const runWithLeftover = inspectConversation({
+    runningCalls: [{ name: 'autoresearch_run_experiment', argsRaw: '{"command":"bash .auto/measure.sh"}' }],
+    nodes: [{
+      kind: 'tool-result',
+      call: { name: 'autoresearch_status' },
+      meta: { snapshot: leftover },
+    }],
+  })
+  assert.equal(runWithLeftover.kind, 'running')
+  assert.equal(runWithLeftover.snapshot, null)
 })
 
 test('projection fold keeps the longer ledger from later tool results', () => {
@@ -278,7 +347,11 @@ test('projection fold keeps the longer ledger from later tool results', () => {
   assert.equal(afterLater?.results.length, 3)
   const ignoredShrink = foldAutoresearchProjection(afterLater, { type: 'tool/result', data: { meta: { snapshot: first } } })
   assert.equal(ignoredShrink?.results.length, 3)
+  assert.equal(ignoredShrink, afterLater)
   assert.equal(preferLedgerSnapshot(first, later)?.results.length, 3)
+  assert.equal(preferLedgerSnapshot(null, later), null)
+  const namedFirst = emptySnapshot({ name: 'tiny', results: first.results })
+  assert.equal(preferLedgerSnapshot(namedFirst, emptySnapshot({ name: 'other', results: later.results }))?.name, 'tiny')
 })
 
 test('formatNum glues short units and spaces longer ones', () => {
@@ -336,6 +409,9 @@ test('GUI drops overlay, status polling, and STATE_V1 chat dumps', () => {
   assert.doesNotMatch(host, /embedState\(/)
   assert.match(host, /presentationMeta/)
   assert.doesNotMatch(host, /AUTORESEARCH_STATE_V1/)
+  assert.match(host, /stateSchema/)
+  assert.match(host, /viewSchema/)
+  assert.match(host, /wire:/)
 })
 
 test('natural-language loop controls retain finite and unlimited Pi semantics', () => {

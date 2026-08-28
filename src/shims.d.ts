@@ -66,3 +66,12 @@ declare module '@deepseek-ai/dsh-client-ui-commands/client' {
     }) => () => void
   }
 }
+
+declare module '@deepseek-ai/dsh-session-projection/types' {
+  interface SessionProjectionMap {
+    autoresearch: import('./types.ts').AutoresearchSnapshot | null
+  }
+  interface SessionProjectionStateMap {
+    autoresearch: import('./types.ts').AutoresearchSnapshot | null
+  }
+}

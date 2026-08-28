@@ -12,7 +12,7 @@ import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from 
 import { evaluatePendingGuard } from './guard.js'
 import { CONTINUE_PLAYBOOK, CREATE_PLAYBOOK, skillBodies } from './playbook.js'
 import { ensureParentDir, sessionFilePath } from './paths.js'
-import { foldAutoresearchProjection } from './projection.js'
+import { autoresearchProjectionSchema, foldAutoresearchProjection } from './projection.js'
 import { toJsonValue, type AutoresearchSnapshot, type ToolResult } from './types.js'
 
 export const name = 'dsh-autoresearch'
@@ -294,11 +294,16 @@ export function apply(ctx: Context, config: Config): void {
   ctx.inject(['sessionProjections'], (projectionCtx: Context) => {
     projectionCtx.sessionProjections.register({
       key: 'autoresearch',
+      stateSchema: autoresearchProjectionSchema,
       init: () => null,
       apply: (state: AutoresearchSnapshot | null, event: { type: string; data: unknown }) => {
         return foldAutoresearchProjection(state, event)
       },
-      stateVersion: 2,
+      wire: {
+        viewSchema: autoresearchProjectionSchema,
+        view: (state: AutoresearchSnapshot | null) => state,
+      },
+      stateVersion: 3,
     })
   })
 }

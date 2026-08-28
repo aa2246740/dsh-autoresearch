@@ -13,6 +13,33 @@ export function snapshotFromMeta(meta: unknown): AutoresearchSnapshot | null {
   return null
 }
 
+/** Identity schema: host registry requires `.parse`; values are already JSON snapshots. */
+export const autoresearchProjectionSchema = {
+  parse(value: unknown): AutoresearchSnapshot | null {
+    if (value == null) return null
+    return snapshotFromMeta(value)
+  },
+}
+
+export function ledgerLength(snapshot: AutoresearchSnapshot | null | undefined): number {
+  return snapshot?.results?.length ?? 0
+}
+
+/** Keep the longer ledger; equal length prefers the later `updatedAt`. */
+export function longerSnapshot(
+  current: AutoresearchSnapshot | null | undefined,
+  next: AutoresearchSnapshot | null | undefined,
+): AutoresearchSnapshot | null {
+  if (!next) return current ?? null
+  if (!current) return next
+  const nextLen = ledgerLength(next)
+  const currentLen = ledgerLength(current)
+  if (nextLen > currentLen) return next
+  if (nextLen < currentLen) return current
+  if ((next.updatedAt ?? 0) >= (current.updatedAt ?? 0)) return next
+  return current
+}
+
 /**
  * Host session projection fold. Later tool/result metas with a longer ledger
  * replace earlier ones so the GUI can follow .auto/log.jsonl without polling
@@ -28,20 +55,24 @@ export function foldAutoresearchProjection(
   if (event.type === 'tool/result') {
     const snapshot = snapshotFromMeta(isRecord(event.data) ? event.data.meta : undefined)
     if (!snapshot) return state
-    const next = snapshot.results?.length ?? 0
-    const prev = state?.results?.length ?? 0
-    if (next > prev) return snapshot
-    if (next > 0 && next === prev) return snapshot
+    const next = longerSnapshot(state, snapshot)
+    return next === state ? state : next
   }
   return state
 }
 
+/**
+ * Upgrade a conversation log snapshot with a longer projected ledger.
+ * Never invent a progress board from projection alone (status/init leftovers).
+ */
 export function preferLedgerSnapshot(
   conversation: AutoresearchSnapshot | null | undefined,
   projected: AutoresearchSnapshot | null | undefined,
 ): AutoresearchSnapshot | null {
-  const convLen = conversation?.results?.length ?? 0
-  const projLen = projected?.results?.length ?? 0
-  if (projLen > convLen) return projected ?? null
-  return conversation ?? projected ?? null
+  if (ledgerLength(conversation) === 0) return conversation ?? null
+  if (ledgerLength(projected) <= ledgerLength(conversation)) return conversation ?? null
+  if (conversation?.name && projected?.name && conversation.name !== projected.name) {
+    return conversation
+  }
+  return projected ?? conversation ?? null
 }

@@ -380,9 +380,11 @@ function AutoresearchDock({ ctx, sessionId, useSession, useProjection, session }
   const lab = useLab()
   rememberSession(sessionId)
   const live = useSession ? useSession((snapshot) => snapshot) : session
-  const progress = inspectConversation(live ?? { runningCalls: [], nodes: [] })
   const projected = snapshotFromMeta(typeof useProjection === 'function' ? useProjection('autoresearch') : undefined)
-  const snapshot = preferLedgerSnapshot(progress.snapshot, projected)
+  const progress = inspectConversation(live ?? { runningCalls: [], nodes: [] })
+  const snapshot = progress.kind === 'board'
+    ? preferLedgerSnapshot(progress.snapshot, projected) ?? progress.snapshot
+    : progress.snapshot
 
   if (lab.dock === 'init') {
     return (
@@ -392,8 +394,8 @@ function AutoresearchDock({ ctx, sessionId, useSession, useProjection, session }
     )
   }
 
-  if ((progress.kind === 'board' || progress.hasRunStarted) && (snapshot?.results?.length ?? 0) > 0) {
-    const model = buildDashboardModel(snapshot!, {
+  if (progress.kind === 'board' && snapshot && (snapshot.results?.length ?? 0) > 0) {
+    const model = buildDashboardModel(snapshot, {
       running: progress.runningExperiment,
       runningCommand: progress.runningCommand,
     })
@@ -407,7 +409,7 @@ function AutoresearchDock({ ctx, sessionId, useSession, useProjection, session }
   if (progress.kind === 'running') {
     return (
       <div data-autoresearch="dock" style={dockShell}>
-        <RunningCard name={snapshot?.name ?? progress.snapshot?.name ?? null} command={progress.runningCommand} />
+          <RunningCard name={projected?.name ?? snapshot?.name ?? null} command={progress.runningCommand} />
       </div>
     )
   }
