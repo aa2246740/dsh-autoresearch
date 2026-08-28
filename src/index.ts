@@ -12,7 +12,7 @@ import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from 
 import { evaluatePendingGuard } from './guard.js'
 import { CONTINUE_PLAYBOOK, CREATE_PLAYBOOK, skillBodies } from './playbook.js'
 import { ensureParentDir, sessionFilePath } from './paths.js'
-import { type AutoresearchSnapshot, type ToolResult } from './types.js'
+import { toJsonValue, type AutoresearchSnapshot, type ToolResult } from './types.js'
 
 export const name = 'dsh-autoresearch'
 export const inject = ['tools']
@@ -56,14 +56,14 @@ function userMessage(text: string): { role: 'user'; content: Array<{ type: 'text
 }
 
 function withSnapshot(controller: AutoresearchController, result: { text?: string; [key: string]: unknown }): ToolResult {
-  const snapshot = controller.snapshot() as AutoresearchSnapshot
-  return {
+  const snapshot = toJsonValue(controller.snapshot() as AutoresearchSnapshot)
+  return toJsonValue({
     ...(result as unknown as ToolResult),
     snapshot,
     // Human text only. Snapshot rides presentationMeta so the GUI can update
     // the dock without dumping the ledger JSON into the transcript.
     text: String(result.text ?? ''),
-  }
+  })
 }
 
 function toolOutput() {

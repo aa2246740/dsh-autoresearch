@@ -11,7 +11,7 @@ import { appendHookLogEntryIfConfigured, runHook } from '../src/hooks.ts'
 import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from '../src/compaction.ts'
 import { sessionFilePath } from '../src/paths.ts'
 import { evaluatePendingGuard } from '../src/guard.ts'
-import { CONTINUE_MARKER } from '../src/types.ts'
+import { CONTINUE_MARKER, toJsonValue } from '../src/types.ts'
 import {
   applyCommandText,
   buildStartLine,
@@ -587,4 +587,18 @@ test('host plugin source is a named apply without a default export', () => {
   assert.match(source, /\[dsh-autoresearch\] loaded/)
   assert.equal(/export\s+default\s+/.test(source), false)
   assert.equal(/append\?\.\(\['"]autoresearch\//.test(source), false)
+  assert.match(source, /toJsonValue/)
+})
+
+test('tool payloads drop undefined keys so harness JSON snapshotting succeeds', () => {
+  const cleaned = toJsonValue({
+    ok: true,
+    text: 'Benchmark passed',
+    details: { command: 'bash .auto/measure.sh', truncation: undefined, parsedPrimary: 2 },
+  })
+  assert.deepEqual(cleaned, {
+    ok: true,
+    text: 'Benchmark passed',
+    details: { command: 'bash .auto/measure.sh', parsedPrimary: 2 },
+  })
 })
