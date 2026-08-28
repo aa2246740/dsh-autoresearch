@@ -13,6 +13,7 @@ import {
   type ConversationInspectInput,
   type DashboardModel,
 } from './dashboard.js'
+import { preferLedgerSnapshot, snapshotFromMeta } from '../projection.js'
 import {
   applyCommandText,
   buildStartLine,
@@ -38,6 +39,7 @@ export const inject = [
 ]
 
 type ConversationSelector = <T>(selector: (snapshot: ConversationInspectInput) => T) => T
+type ProjectionReader = (key: string) => unknown
 
 type AnyCtx = ClientContext & {
   slots: {
@@ -67,6 +69,7 @@ interface SettingsScope {
 interface DockProps {
   sessionId: string
   useSession?: ConversationSelector
+  useProjection?: ProjectionReader
   session?: ConversationInspectInput
 }
 
@@ -373,11 +376,13 @@ function ProgressCard({
   )
 }
 
-function AutoresearchDock({ ctx, sessionId, useSession, session }: DockProps & { ctx: AnyCtx }) {
+function AutoresearchDock({ ctx, sessionId, useSession, useProjection, session }: DockProps & { ctx: AnyCtx }) {
   const lab = useLab()
   rememberSession(sessionId)
   const live = useSession ? useSession((snapshot) => snapshot) : session
   const progress = inspectConversation(live ?? { runningCalls: [], nodes: [] })
+  const projected = snapshotFromMeta(typeof useProjection === 'function' ? useProjection('autoresearch') : undefined)
+  const snapshot = preferLedgerSnapshot(progress.snapshot, projected)
 
   if (lab.dock === 'init') {
     return (
@@ -387,8 +392,8 @@ function AutoresearchDock({ ctx, sessionId, useSession, session }: DockProps & {
     )
   }
 
-  if (progress.kind === 'board' && progress.snapshot) {
-    const model = buildDashboardModel(progress.snapshot, {
+  if ((progress.kind === 'board' || progress.hasRunStarted) && (snapshot?.results?.length ?? 0) > 0) {
+    const model = buildDashboardModel(snapshot!, {
       running: progress.runningExperiment,
       runningCommand: progress.runningCommand,
     })
@@ -402,7 +407,7 @@ function AutoresearchDock({ ctx, sessionId, useSession, session }: DockProps & {
   if (progress.kind === 'running') {
     return (
       <div data-autoresearch="dock" style={dockShell}>
-        <RunningCard name={progress.snapshot?.name ?? null} command={progress.runningCommand} />
+        <RunningCard name={snapshot?.name ?? progress.snapshot?.name ?? null} command={progress.runningCommand} />
       </div>
     )
   }

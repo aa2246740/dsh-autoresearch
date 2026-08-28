@@ -12,6 +12,7 @@ import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from 
 import { sessionFilePath } from '../src/paths.ts'
 import { evaluatePendingGuard } from '../src/guard.ts'
 import { CONTINUE_MARKER, toJsonValue } from '../src/types.ts'
+import { foldAutoresearchProjection, preferLedgerSnapshot } from '../src/projection.ts'
 import {
   applyCommandText,
   buildStartLine,
@@ -259,6 +260,25 @@ test('inspectConversation uses the latest log_experiment snapshot, not the first
   assert.equal(seen.kind, 'board')
   assert.equal(seen.snapshot?.results.length, 3)
   assert.equal(buildDashboardModel(seen.snapshot!).discarded, 1)
+})
+
+test('projection fold keeps the longer ledger from later tool results', () => {
+  const first = emptySnapshot({
+    results: [sampleRun({ run: 1, metric: 10, status: 'keep' })],
+  })
+  const later = emptySnapshot({
+    results: [
+      sampleRun({ run: 1, metric: 10, status: 'keep' }),
+      sampleRun({ run: 2, metric: 8, status: 'keep' }),
+      sampleRun({ run: 3, metric: 12, status: 'discard' }),
+    ],
+  })
+  const afterFirst = foldAutoresearchProjection(null, { type: 'tool/result', data: { meta: { snapshot: first } } })
+  const afterLater = foldAutoresearchProjection(afterFirst, { type: 'tool/result', data: { meta: { snapshot: later } } })
+  assert.equal(afterLater?.results.length, 3)
+  const ignoredShrink = foldAutoresearchProjection(afterLater, { type: 'tool/result', data: { meta: { snapshot: first } } })
+  assert.equal(ignoredShrink?.results.length, 3)
+  assert.equal(preferLedgerSnapshot(first, later)?.results.length, 3)
 })
 
 test('formatNum glues short units and spaces longer ones', () => {
