@@ -232,6 +232,35 @@ test('inspectConversation hides the board until log_experiment, even after init'
   assert.match(board.rows.map((row) => row.status).join(','), /discard/)
 })
 
+test('inspectConversation uses the latest log_experiment snapshot, not the first', () => {
+  const first = emptySnapshot({
+    name: 'tiny',
+    metricName: 'score',
+    results: [sampleRun({ run: 1, metric: 10, status: 'keep', description: 'baseline' })],
+  })
+  const later = emptySnapshot({
+    name: 'tiny',
+    metricName: 'score',
+    results: [
+      sampleRun({ run: 1, metric: 10, status: 'keep', description: 'baseline' }),
+      sampleRun({ run: 2, metric: 8, status: 'keep', description: 'better' }),
+      sampleRun({ run: 3, metric: 12, status: 'discard', description: 'worse' }),
+    ],
+  })
+  const seen = inspectConversation({
+    runningCalls: [],
+    nodes: [
+      { kind: 'tool-result', call: { name: 'autoresearch_log_experiment' }, meta: { snapshot: first } },
+      { kind: 'assistant', blocks: [
+        { kind: 'tool-result', call: { name: 'autoresearch_log_experiment' }, meta: { snapshot: later } },
+      ] },
+    ],
+  })
+  assert.equal(seen.kind, 'board')
+  assert.equal(seen.snapshot?.results.length, 3)
+  assert.equal(buildDashboardModel(seen.snapshot!).discarded, 1)
+})
+
 test('formatNum glues short units and spaces longer ones', () => {
   assert.equal(formatNum(2, 'ms'), '2ms')
   assert.equal(formatNum(2, 'count'), '2 count')

@@ -259,21 +259,49 @@ function commandFromArgsRaw(raw: string | undefined): string | null {
   return raw
 }
 
+function visitRecord(node: Record<string, unknown>, visit: (node: Record<string, unknown>) => void, seen: Set<unknown>): void {
+  if (seen.has(node)) return
+  seen.add(node)
+  visit(node)
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) walkNodes(value, visit, seen)
+    else if (isRecord(value) && value !== node.meta && value !== node.snapshot) walkNodes([value], visit, seen)
+  }
+}
+
 function walkNodes(
   nodes: readonly unknown[],
   visit: (node: Record<string, unknown>) => void,
+  seen: Set<unknown> = new Set(),
 ): void {
   for (const item of nodes) {
     if (!isRecord(item)) continue
-    visit(item)
-    if (Array.isArray(item.subCalls)) walkNodes(item.subCalls, visit)
-    if (Array.isArray(item.blocks)) walkNodes(item.blocks, visit)
+    visitRecord(item, visit, seen)
   }
+}
+
+function conversationNodes(conv: ConversationInspectInput | Record<string, unknown> | null | undefined): unknown[] {
+  if (!conv || typeof conv !== 'object') return []
+  const rec = conv as Record<string, unknown>
+  const out: unknown[] = []
+  const push = (value: unknown) => {
+    if (Array.isArray(value)) out.push(...value)
+  }
+  push(rec.nodes)
+  if (isRecord(rec.chat)) {
+    if (isRecord(rec.chat.legacy)) push(rec.chat.legacy.nodes)
+    const store = rec.chat.nodes
+    if (store && typeof (store as { values?: () => unknown[] }).values === 'function') {
+      try { push((store as { values: () => unknown[] }).values()) } catch { /* ignore */ }
+    }
+  }
+  return out
 }
 
 /**
  * Progress comes from this conversation's run/log tools, not from /autoresearch status.
  * init_experiment alone (empty ledger) stays kind 'none'.
+ * Later log_experiment snapshots replace earlier ones so discard/Δ% show up.
  */
 export function inspectConversation(conv: ConversationInspectInput | null | undefined): ConversationProgress {
   const runningCalls = conv?.runningCalls ?? []
@@ -285,15 +313,17 @@ export function inspectConversation(conv: ConversationInspectInput | null | unde
   let logSnapshot: AutoresearchSnapshot | null = null
   let anySnapshot: AutoresearchSnapshot | null = null
 
-  walkNodes(conv?.nodes ?? [], (node) => {
+  walkNodes(conversationNodes(conv), (node) => {
     const name = toolNameOf(node)
     const isResult = node.kind === 'tool-result' || name.startsWith('autoresearch_')
-    if (!isResult) return
+    if (!isResult && name !== RUN_TOOL && name !== LOG_TOOL) return
     if (name === RUN_TOOL) hasRunStarted = true
     const snapshot = snapshotFromNode(node)
     if (!snapshot) return
     anySnapshot = snapshot
-    if (name === LOG_TOOL) logSnapshot = snapshot
+    if (name === LOG_TOOL || name.endsWith('log_experiment')) {
+      logSnapshot = snapshot
+    }
   })
 
   const snapshot = logSnapshot ?? anySnapshot

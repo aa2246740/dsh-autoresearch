@@ -376,13 +376,8 @@ function ProgressCard({
 function AutoresearchDock({ ctx, sessionId, useSession, session }: DockProps & { ctx: AnyCtx }) {
   const lab = useLab()
   rememberSession(sessionId)
-  const runningCalls = useSession
-    ? useSession((snapshot) => snapshot.runningCalls ?? [])
-    : (session?.runningCalls ?? [])
-  const nodes = useSession
-    ? useSession((snapshot) => snapshot.nodes ?? [])
-    : (session?.nodes ?? [])
-  const progress = inspectConversation({ runningCalls, nodes })
+  const live = useSession ? useSession((snapshot) => snapshot) : session
+  const progress = inspectConversation(live ?? { runningCalls: [], nodes: [] })
 
   if (lab.dock === 'init') {
     return (
