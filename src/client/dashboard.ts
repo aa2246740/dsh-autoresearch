@@ -98,9 +98,10 @@ export function confidenceFor(results: readonly ExperimentRun[], direction: Metr
 
 export function formatNum(value: number | null | undefined, unit = ''): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—'
-  const suffix = unit || ''
-  if (value === Math.round(value)) return `${value}${suffix}`
-  return `${value.toFixed(2)}${suffix}`
+  const raw = value === Math.round(value) ? String(value) : value.toFixed(2)
+  if (!unit) return raw
+  const glue = unit.length <= 2 ? '' : ' '
+  return `${raw}${glue}${unit}`
 }
 
 export function formatDeltaPct(pct: number | null): string | null {

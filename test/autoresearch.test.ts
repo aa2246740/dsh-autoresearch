@@ -25,6 +25,7 @@ import {
 } from '../src/client/store.ts'
 import {
   buildDashboardModel,
+  formatNum,
   inspectConversation,
   progressCardKind,
   sampleRun,
@@ -229,6 +230,12 @@ test('inspectConversation hides the board until log_experiment, even after init'
   assert.equal(board.progress?.deltaPct, -20)
   assert.equal(board.progress?.improved, true)
   assert.match(board.rows.map((row) => row.status).join(','), /discard/)
+})
+
+test('formatNum glues short units and spaces longer ones', () => {
+  assert.equal(formatNum(2, 'ms'), '2ms')
+  assert.equal(formatNum(2, 'count'), '2 count')
+  assert.equal(formatNum(8.5, ''), '8.50')
 })
 
 test('client daily chrome has no experiment chip and init form is goal+rounds', () => {
