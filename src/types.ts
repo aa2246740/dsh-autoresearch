@@ -28,6 +28,7 @@ export interface PrivateState {
   hintsThisSession: number
   lastRunChecks: { pass: boolean; output: string; duration: number } | null
   lastRunDuration: number | null
+  protectedPaths: string[]
   updatedAt: number
   resumedAt?: number
 }

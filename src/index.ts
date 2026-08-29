@@ -3,6 +3,7 @@
  * Named `apply` only — no default export (dshx function/client contract).
  */
 import { writeFileSync } from 'node:fs'
+import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
@@ -34,7 +35,58 @@ export const Config = z.object({
 const MARKER = '[dsh-autoresearch] loaded'
 const controllers = new Map<string, AutoresearchController>()
 
-function workspaceOf(agent: { session?: { header?: { cwd?: string } } } | undefined): string {
+type SessionLike = {
+  header?: { cwd?: string }
+  events?: readonly unknown[]
+  append?: (type: string, data: unknown) => void
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+/**
+ * Find files this conversation already changed so an umbrella workspace can
+ * receive narrow local version protection without staging sibling projects.
+ */
+export function protectedPathsFromSession(session: SessionLike | undefined, cwd: string): string[] {
+  const selected = new Set<string>()
+  const addPath = (changedPath: unknown): boolean => {
+    if (typeof changedPath !== 'string' || !changedPath.trim()) return false
+    const absolute = path.resolve(cwd, changedPath)
+    const relative = path.relative(cwd, absolute)
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false
+    selected.add(relative.split(path.sep).join('/'))
+    return selected.size >= 256
+  }
+  for (const rawEvent of session?.events ?? []) {
+    const event = record(rawEvent)
+    if (event?.type === 'tool/call') {
+      const data = record(event.data)
+      if (data?.name !== 'write' && data?.name !== 'edit') continue
+      let args = record(data.arguments)
+      if (!args && typeof data.arguments === 'string') {
+        try { args = record(JSON.parse(data.arguments)) } catch { /* incomplete or non-JSON arguments */ }
+      }
+      if (addPath(args?.file_path)) return [...selected]
+      continue
+    }
+    if (event?.type !== 'tool/result') continue
+    const data = record(event.data)
+    const message = record(data?.message)
+    const meta = record(data?.meta) ?? record(message?.meta)
+    const diffs = Array.isArray(meta?.diffs) ? meta.diffs : []
+    for (const rawDiff of diffs) {
+      const changedPath = record(rawDiff)?.path
+      if (addPath(changedPath)) return [...selected]
+    }
+  }
+  return [...selected]
+}
+
+function workspaceOf(agent: { session?: SessionLike } | undefined): string {
   const cwd = agent?.session?.header?.cwd
   return typeof cwd === 'string' && cwd.length > 0 ? cwd : process.cwd()
 }
@@ -133,11 +185,15 @@ export function apply(ctx: Context, config: Config): void {
       args: { type: 'string', description: 'Raw /autoresearch arguments' },
     },
     output: toolOutput(),
-    async execute(args: { args?: string }, exec: { agent?: { followup?: (message: unknown) => void; session?: { header?: { cwd?: string }; append?: (type: string, data: unknown) => void } } }) {
-      const controller = controllerFor(workspaceOf(exec.agent))
+    async execute(args: { args?: string }, exec: { agent?: { followup?: (message: unknown) => void; session?: SessionLike } }) {
+      const cwd = workspaceOf(exec.agent)
+      const controller = controllerFor(cwd)
       const raw = String(args.args ?? '')
       enableAllowNoGit(controller, raw)
-      const result = withSnapshot(controller, await controller.control({ args: raw }))
+      const result = withSnapshot(controller, await controller.control({
+        args: raw,
+        protectedPaths: protectedPathsFromSession(exec.agent?.session, cwd),
+      }))
       if (result.ok && result.active && isActivating(raw)) {
         followup(exec.agent, result.needsSetup ? CREATE_PLAYBOOK : CONTINUE_PLAYBOOK)
       }
@@ -236,11 +292,15 @@ export function apply(ctx: Context, config: Config): void {
       name: 'autoresearch',
       description: 'Explicitly start, resume, inspect, or stop a durable autoresearch experiment loop',
       input: { hint: '<goal | resume | status | off | clear>' },
-      handler: async (invocation: { agent: { followup?: (message: unknown) => void; session?: { header?: { cwd?: string }; append?: (type: string, data: unknown) => void } }; rawInput: string }) => {
-        const controller = controllerFor(workspaceOf(invocation.agent))
+      handler: async (invocation: { agent: { followup?: (message: unknown) => void; session?: SessionLike }; rawInput: string }) => {
+        const cwd = workspaceOf(invocation.agent)
+        const controller = controllerFor(cwd)
         const raw = invocation.rawInput
         enableAllowNoGit(controller, raw)
-        const result = withSnapshot(controller, await controller.control({ args: raw }))
+        const result = withSnapshot(controller, await controller.control({
+          args: raw,
+          protectedPaths: protectedPathsFromSession(invocation.agent.session, cwd),
+        }))
         if (result.ok && result.active && isActivating(raw)) {
           followup(invocation.agent, result.needsSetup ? CREATE_PLAYBOOK : CONTINUE_PLAYBOOK)
         }

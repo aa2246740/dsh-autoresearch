@@ -96,6 +96,27 @@ function runGit(cwd, args, { allowFailure = false } = {}) {
   return result;
 }
 
+function normalizeProtectedPaths(workDir, candidates) {
+  if (!Array.isArray(candidates)) return [];
+  const normalized = [];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string" || !candidate.trim()) continue;
+    const absolute = path.resolve(workDir, candidate);
+    const relative = path.relative(workDir, absolute);
+    if (!relative || relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) continue;
+    const portable = relative.split(path.sep).join("/");
+    if (portable === ".git" || portable.startsWith(".git/")) continue;
+    if (portable === ".auto" || portable.startsWith(".auto/")) continue;
+    if (portable === "autoresearch.md" || portable.startsWith("autoresearch.")) continue;
+    normalized.push(portable);
+  }
+  return [...new Set(normalized)];
+}
+
+function gitPathspecs(paths) {
+  return paths.length ? paths.map((value) => `:(literal)${value}`) : ["."];
+}
+
 function trimTail(text, maxLines, maxBytes) {
   const source = String(text);
   const sourceBytes = Buffer.byteLength(source);
@@ -282,6 +303,7 @@ function defaultPrivateState(cwd, workDir) {
     hintsThisSession: 0,
     lastRunChecks: null,
     lastRunDuration: null,
+    protectedPaths: [],
     updatedAt: Date.now(),
   };
 }
@@ -341,6 +363,14 @@ export class AutoresearchController {
   workDir() {
     const configured = this.config().workingDir;
     return configured ? path.resolve(this.cwd, configured) : this.cwd;
+  }
+
+  protectedPaths(candidates = this.privateState().protectedPaths) {
+    return normalizeProtectedPaths(this.workDir(), candidates);
+  }
+
+  protectionPathspecs(candidates = this.privateState().protectedPaths) {
+    return gitPathspecs(this.protectedPaths(candidates));
   }
 
   statePath() {
@@ -465,10 +495,10 @@ export class AutoresearchController {
         error: "Local version protection needs an initial safety baseline.",
       };
     }
-    return { ok: true, workDir, gitRoot: lines[1], allowNoGit };
+    return { ok: true, workDir, gitRoot: lines[1], allowNoGit, protectedPaths: this.protectedPaths() };
   }
 
-  prepareGitSafety() {
+  prepareGitSafety(proposedProtectedPaths: string[] = []) {
     const workDir = this.workDir();
     if (!fs.existsSync(workDir) || !fs.statSync(workDir).isDirectory()) return this.gitSafety();
     const allowNoGit = this.config().allowNoGit === true;
@@ -494,10 +524,23 @@ export class AutoresearchController {
       lines = String(probe.stdout || "").trim().split(/\r?\n/).filter(Boolean);
     }
 
+    const protectedPaths = this.protectedPaths(proposedProtectedPaths);
+    const pathspecs = gitPathspecs(protectedPaths);
     const head = runGit(workDir, ["rev-parse", "--verify", "HEAD"], { allowFailure: true });
-    const status = runGit(workDir, ["status", "--porcelain=v1", "--untracked-files=all", "--", "."], { allowFailure: true });
-    if (status.error || status.status !== 0) {
-      const reason = status.error?.message || `${status.stdout || ""}${status.stderr || ""}`.trim();
+    const staged = runGit(workDir, ["add", "-A", "--", ...pathspecs], { allowFailure: true });
+    if (staged.error || staged.status !== 0) {
+      const reason = staged.error?.message || `${staged.stdout || ""}${staged.stderr || ""}`.trim();
+      return {
+        ok: false,
+        code: "git-baseline-failed",
+        workDir,
+        allowNoGit: false,
+        error: `Could not save the project's local safety baseline.${reason ? ` (${reason})` : ""}`,
+      };
+    }
+    const diff = runGit(workDir, ["diff", "--cached", "--quiet", "--", ...pathspecs], { allowFailure: true });
+    if (diff.error || (diff.status !== 0 && diff.status !== 1)) {
+      const reason = diff.error?.message || `${diff.stdout || ""}${diff.stderr || ""}`.trim();
       return {
         ok: false,
         code: "git-setup-failed",
@@ -506,9 +549,10 @@ export class AutoresearchController {
         error: `Could not inspect the project for local version protection.${reason ? ` (${reason})` : ""}`,
       };
     }
-    const needsBaseline = head.error || head.status !== 0 || String(status.stdout || "").trim().length > 0;
+    const hasChanges = diff.status === 1;
+    const needsBaseline = head.error || head.status !== 0 || hasChanges;
     if (!needsBaseline) {
-      return { ok: true, workDir, gitRoot: lines[1], allowNoGit: false, initialized, baselineCreated: false };
+      return { ok: true, workDir, gitRoot: lines[1], allowNoGit: false, initialized, baselineCreated: false, protectedPaths };
     }
 
     const identity = [
@@ -533,27 +577,12 @@ export class AutoresearchController {
       configuredIdentity.push(key);
     }
 
-    const hasChanges = String(status.stdout || "").trim().length > 0;
-    if (hasChanges) {
-      const staged = runGit(workDir, ["add", "-A", "--", "."], { allowFailure: true });
-      if (staged.error || staged.status !== 0) {
-        const reason = staged.error?.message || `${staged.stdout || ""}${staged.stderr || ""}`.trim();
-        return {
-          ok: false,
-          code: "git-baseline-failed",
-          workDir,
-          allowNoGit: false,
-          error: `Could not save the project's local safety baseline.${reason ? ` (${reason})` : ""}`,
-        };
-      }
-    }
-
     const commitArgs = [
       "-c", "commit.gpgSign=false",
       "commit", "--no-verify", "-q",
       "-m", "chore: create autoresearch safety baseline",
     ];
-    if (hasChanges) commitArgs.push("--", ".");
+    if (hasChanges) commitArgs.push("--", ...pathspecs);
     else commitArgs.push("--allow-empty");
     const committed = runGit(workDir, commitArgs, { allowFailure: true });
     if (committed.error || committed.status !== 0) {
@@ -575,6 +604,7 @@ export class AutoresearchController {
       allowNoGit: false,
       initialized,
       baselineCreated: true,
+      protectedPaths,
       configuredIdentity,
       commit,
       setupText: `Git: local Git safety baseline created (${commit}); nothing was uploaded.`,
@@ -608,7 +638,7 @@ export class AutoresearchController {
     return { result, steer: steerMessageFor(event, result) };
   }
 
-  async control({ args = "" } = {}) {
+  async control({ args = "", protectedPaths = [] }: { args?: string; protectedPaths?: string[] } = {}) {
     let text = String(args).trim();
     const command = text.toLowerCase();
     if (!text || command === "help") {
@@ -659,14 +689,21 @@ export class AutoresearchController {
     if (/^(start|resume)(?:\s|$)/i.test(text)) text = text.replace(/^(start|resume)\s*/i, "").trim();
     const inferred = inferAutoresearchConfigFromPrompt(text);
     const configNotes = inferred ? applyInferredAutoresearchConfig(this.cwd, inferred) : [];
-    const safety = this.prepareGitSafety();
+    const safety = this.prepareGitSafety(protectedPaths);
     if (!safety.ok) return { ok: false, active: false, text: safety.error, details: safety };
 
     const before = this.privateState().active ? { steer: null } : await this.fireHook("before", {
       next_run: this.persisted().results.length + 1,
       last_run: this.persisted().results.at(-1) ?? null,
     });
-    this.savePrivate({ active: true, manualOff: false, autoResumeTurns: 0, pendingResumeToken: null, hintsThisSession: 0 });
+    this.savePrivate({
+      active: true,
+      manualOff: false,
+      autoResumeTurns: 0,
+      pendingResumeToken: null,
+      hintsThisSession: 0,
+      protectedPaths: safety.protectedPaths ?? this.protectedPaths(protectedPaths),
+    });
     const logPath = sessionFilePath(this.workDir(), "log");
     const hasHeader = fs.existsSync(logPath) && hasAutoresearchConfigHeader(fs.readFileSync(logPath, "utf8"));
     const hasPrompt = fs.existsSync(sessionFilePath(this.workDir(), "prompt"));
@@ -860,14 +897,15 @@ export class AutoresearchController {
 
     let resolvedCommit = String(commit).slice(0, 7);
     let gitText = "";
+    const pathspecs = this.protectionPathspecs();
     if (!safety.allowNoGit && status === "keep") {
-      runGit(this.workDir(), ["add", "-A", "--", "."]);
-      const diff = runGit(this.workDir(), ["diff", "--cached", "--quiet", "--", "."], { allowFailure: true });
+      runGit(this.workDir(), ["add", "-A", "--", ...pathspecs]);
+      const diff = runGit(this.workDir(), ["diff", "--cached", "--quiet", "--", ...pathspecs], { allowFailure: true });
       if (diff.status === 0) {
         gitText = "Git: nothing to commit.";
       } else {
         const resultData = { status, [persisted.metricName || "metric"]: metric, ...secondaryMetrics };
-        runGit(this.workDir(), ["commit", "-m", `${description}\n\nResult: ${JSON.stringify(resultData)}`, "--", "."]);
+        runGit(this.workDir(), ["commit", "-m", `${description}\n\nResult: ${JSON.stringify(resultData)}`, "--", ...pathspecs]);
         resolvedCommit = String(runGit(this.workDir(), ["rev-parse", "--short=7", "HEAD"]).stdout).trim();
         gitText = `Git: committed ${resolvedCommit}.`;
       }
@@ -895,14 +933,19 @@ export class AutoresearchController {
     this.notifyChange();
 
     if (!safety.allowNoGit && status !== "keep") {
-      runGit(this.workDir(), [
-        "checkout", "--", ".",
-        ":(exclude,glob)**/.auto", ":(exclude,glob)**/.auto/**",
-        ":(exclude,glob)**/autoresearch.*", ":(exclude,glob)**/autoresearch.*/**",
-      ]);
-      runGit(this.workDir(), [
-        "clean", "-fd", "-e", ".auto", "-e", "**/.auto/**", "-e", "autoresearch.*", "-e", "**/autoresearch.*/**",
-      ]);
+      if (this.protectedPaths().length) {
+        runGit(this.workDir(), ["checkout", "--", ...pathspecs]);
+        runGit(this.workDir(), ["clean", "-fd", "--", ...pathspecs]);
+      } else {
+        runGit(this.workDir(), [
+          "checkout", "--", ".",
+          ":(exclude,glob)**/.auto", ":(exclude,glob)**/.auto/**",
+          ":(exclude,glob)**/autoresearch.*", ":(exclude,glob)**/autoresearch.*/**",
+        ]);
+        runGit(this.workDir(), [
+          "clean", "-fd", "-e", ".auto", "-e", "**/.auto/**", "-e", "autoresearch.*", "-e", "**/autoresearch.*/**",
+        ]);
+      }
       gitText = `Git: reverted ${status} changes; autoresearch artifacts were preserved.`;
     }
 

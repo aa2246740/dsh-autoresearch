@@ -6,6 +6,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { AutoresearchController, inferAutoresearchConfigFromPrompt } from '../src/controller.ts'
+import { protectedPathsFromSession } from '../src/index.ts'
 import { reconstructJsonlState } from '../src/jsonl.ts'
 import { appendHookLogEntryIfConfigured, runHook } from '../src/hooks.ts'
 import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from '../src/compaction.ts'
@@ -448,6 +449,73 @@ test('controller automatically creates a local Git safety baseline for beginners
   git(cwd, 'checkout', '--', 'target.txt')
   assert.equal(fs.readFileSync(path.join(cwd, 'target.txt'), 'utf8'), 'before autoresearch\n')
   await controller.close()
+})
+
+test('automatic setup protects the session working set without scanning an umbrella workspace', async (t) => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-umbrella-'))
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-umbrella-state-'))
+  t.after(() => {
+    fs.rmSync(cwd, { recursive: true, force: true })
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  })
+
+  fs.writeFileSync(path.join(cwd, 'ink-particle-wall.html'), 'before autoresearch\n')
+  const noiseDir = path.join(cwd, 'unrelated-project')
+  fs.mkdirSync(noiseDir)
+  const longStem = 'x'.repeat(180)
+  for (let index = 0; index < 6_500; index += 1) {
+    fs.writeFileSync(path.join(noiseDir, `${String(index).padStart(5, '0')}-${longStem}.txt`), '')
+  }
+
+  const controller = new AutoresearchController({ cwd, dataDir })
+  const started = await controller.control({
+    args: 'optimize the particle wall',
+    protectedPaths: ['ink-particle-wall.html'],
+  } as never)
+
+  assert.equal(started.ok, true)
+  assert.doesNotMatch(started.text, /ENOBUFS/)
+  assert.equal(git(cwd, 'show', '--name-only', '--pretty=format:', 'HEAD'), 'ink-particle-wall.html')
+  assert.match(git(cwd, 'status', '--porcelain=v1', '--untracked-files=normal'), /unrelated-project\//)
+
+  await controller.initExperiment({ name: 'particle fps', metric_name: 'fps', direction: 'higher' })
+  fs.writeFileSync(path.join(cwd, 'ink-particle-wall.html'), 'candidate\n')
+  fs.writeFileSync(path.join(noiseDir, 'keep-me.txt'), 'unrelated user work\n')
+  const discarded = await controller.logExperiment({ metric: 30, status: 'discard', description: 'slow candidate' })
+  assert.equal(discarded.ok, true)
+  assert.equal(fs.readFileSync(path.join(cwd, 'ink-particle-wall.html'), 'utf8'), 'before autoresearch\n')
+  assert.equal(fs.readFileSync(path.join(noiseDir, 'keep-me.txt'), 'utf8'), 'unrelated user work\n')
+  await controller.close()
+})
+
+test('session diff metadata selects only files inside the current workspace', () => {
+  const cwd = '/workspace'
+  const session = {
+    events: [
+      {
+        type: 'tool/call',
+        data: {
+          name: 'write',
+          arguments: JSON.stringify({ file_path: '/workspace/new-benchmark.js' }),
+        },
+      },
+      {
+        type: 'tool/result',
+        data: {
+          message: {
+            meta: {
+              diffs: [
+                { path: '/workspace/ink-particle-wall.html' },
+                { path: '/workspace/ink-particle-wall.html' },
+                { path: '/somewhere-else/private.txt' },
+              ],
+            },
+          },
+        },
+      },
+    ],
+  }
+  assert.deepEqual(protectedPathsFromSession(session, cwd), ['new-benchmark.js', 'ink-particle-wall.html'])
 })
 
 test('automatic setup supplies a repository-local identity when Git has none', async () => {
