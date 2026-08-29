@@ -24,6 +24,7 @@ import {
   patchLab,
   rememberSession,
   showInitDock,
+  startDecisionMessage,
   subscribeLab,
   getLabState,
   type ExperimentDraft,
@@ -199,7 +200,12 @@ function InitDockCard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | nul
     }
     patchLab({ draft, busy: true, error: null })
     try {
-      await executeLine(ctx, sessionId, buildStartLine(draft))
+      const text = await executeLine(ctx, sessionId, buildStartLine(draft))
+      const decision = startDecisionMessage(text)
+      if (decision) {
+        patchLab({ busy: false, error: decision })
+        return
+      }
       hideAfterConfirm()
     } catch (error) {
       patchLab({ busy: false, error: friendlyStartError(error) })

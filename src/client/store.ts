@@ -127,8 +127,13 @@ export function parseRoundBudget(raw: string): number | null {
 /** Never expose internal process/Git failures in the beginner start card. */
 export function friendlyStartError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error ?? '')
-  if (/没有活动会话|请填写目标|轮次必须/.test(raw)) return raw
+  if (/没有活动会话|请填写目标|轮次必须|项目目录不可用|特殊路径无法自动保护/.test(raw)) return raw
   return '自动准备没有完成，但项目和会话都没有损坏。请再点一次“确认并开始”；如果仍未完成，请重新打开目标项目会话。'
+}
+
+/** A recoverable decision keeps the confirmation card open instead of looking successful. */
+export function startDecisionMessage(text: string): string | null {
+  return /项目目录不可用|特殊路径无法自动保护/.test(text) ? text : null
 }
 
 /**

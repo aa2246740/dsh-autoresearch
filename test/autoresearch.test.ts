@@ -25,6 +25,7 @@ import {
   parseRoundBudget,
   resetLab,
   showInitDock,
+  startDecisionMessage,
 } from '../src/client/store.ts'
 import {
   buildDashboardModel,
@@ -164,6 +165,9 @@ test('the beginner start card never exposes internal Git or process errors', () 
   const message = friendlyStartError(new Error('Could not inspect project (spawnSync git ENOBUFS)'))
   assert.match(message, /自动准备没有完成/)
   assert.doesNotMatch(message, /git|spawn|enobufs|error/i)
+  assert.match(friendlyStartError(new Error('项目目录不可用，请重新选择项目')), /项目目录不可用/)
+  assert.match(startDecisionMessage('项目目录不可用，请重新选择项目') ?? '', /项目目录不可用/)
+  assert.equal(startDecisionMessage('Autoresearch is active.'), null)
 })
 
 test('status snapshots do not open a progress dock', () => {
