@@ -379,6 +379,8 @@ test('client daily chrome has no experiment chip and init form is goal+rounds', 
   assert.doesNotMatch(source, /data-autoresearch-field="direction"/)
   const initCard = source.slice(source.indexOf('function InitDockCard'), source.indexOf('function WaitingCard'))
   assert.match(initCard, /确认并开始/)
+  assert.match(initCard, /自动开启本地版本保护/)
+  assert.match(initCard, /不会上传代码/)
   assert.doesNotMatch(initCard, /主指标/)
   assert.doesNotMatch(initCard, /metricName/)
   assert.doesNotMatch(initCard, /direction/)
@@ -430,17 +432,55 @@ test('natural-language loop controls retain finite and unlimited Pi semantics', 
   })
 })
 
-test('controller blocks no-Git loops unless allowNoGit is explicit', async () => {
+test('controller automatically creates a local Git safety baseline for beginners', async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-no-git-'))
-  const controller = new AutoresearchController({ cwd, dataDir: path.join(cwd, '.private-state') })
-  const blocked = await controller.control({ args: 'optimize this' })
-  assert.equal(blocked.ok, false)
-  assert.match(blocked.text, /requires .*git working tree/i)
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-no-git-state-'))
+  fs.writeFileSync(path.join(cwd, 'target.txt'), 'before autoresearch\n')
+  const controller = new AutoresearchController({ cwd, dataDir })
+
+  const started = await controller.control({ args: 'optimize this' })
+  assert.equal(started.ok, true)
+  assert.equal(git(cwd, 'rev-parse', '--is-inside-work-tree'), 'true')
+  assert.match(git(cwd, 'log', '-1', '--pretty=%s'), /autoresearch safety baseline/i)
+  assert.match(started.text, /local Git safety baseline/i)
+
+  fs.writeFileSync(path.join(cwd, 'target.txt'), 'candidate\n')
+  git(cwd, 'checkout', '--', 'target.txt')
+  assert.equal(fs.readFileSync(path.join(cwd, 'target.txt'), 'utf8'), 'before autoresearch\n')
+  await controller.close()
+})
+
+test('automatic setup supplies a repository-local identity when Git has none', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-no-identity-'))
+  const previousGlobal = process.env.GIT_CONFIG_GLOBAL
+  const previousNoSystem = process.env.GIT_CONFIG_NOSYSTEM
+  process.env.GIT_CONFIG_GLOBAL = path.join(cwd, 'empty-global-gitconfig')
+  process.env.GIT_CONFIG_NOSYSTEM = '1'
+  try {
+    fs.writeFileSync(path.join(cwd, 'target.txt'), 'baseline\n')
+    const controller = new AutoresearchController({ cwd, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-state-')) })
+    const started = await controller.control({ args: 'optimize this' })
+    assert.equal(started.ok, true)
+    assert.equal(git(cwd, 'config', '--local', '--get', 'user.name'), 'DSH Autoresearch')
+    assert.equal(git(cwd, 'config', '--local', '--get', 'user.email'), 'autoresearch@local.invalid')
+    await controller.close()
+  } finally {
+    if (previousGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL
+    else process.env.GIT_CONFIG_GLOBAL = previousGlobal
+    if (previousNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM
+    else process.env.GIT_CONFIG_NOSYSTEM = previousNoSystem
+  }
+})
+
+test('allowNoGit remains an explicit advanced escape hatch', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-allow-no-git-'))
   fs.mkdirSync(path.join(cwd, '.auto'), { recursive: true })
   fs.writeFileSync(path.join(cwd, '.auto', 'config.json'), '{"allowNoGit":true}\n')
-  const allowed = await controller.control({ args: 'optimize this' })
-  assert.equal(allowed.ok, true)
-  assert.match(allowed.text, /allowNoGit=true/)
+  const controller = new AutoresearchController({ cwd, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-state-')) })
+  const started = await controller.control({ args: 'optimize this' })
+  assert.equal(started.ok, true)
+  assert.match(started.text, /allowNoGit=true/)
+  assert.equal(fs.existsSync(path.join(cwd, '.git')), false)
   await controller.close()
 })
 
@@ -518,8 +558,11 @@ test('controller runs, logs, commits, schedules continuation, and stops at max i
 
 test('discard restores worktree changes while preserving autoresearch artifacts', async () => {
   const cwd = createGitFixture()
+  fs.writeFileSync(path.join(cwd, 'target.txt'), 'user work before autoresearch\n')
+  fs.writeFileSync(path.join(cwd, 'notes.txt'), 'untracked user note\n')
   const controller = new AutoresearchController({ cwd, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-state-')) })
-  await controller.control({ args: 'test one idea' })
+  const started = await controller.control({ args: 'test one idea' })
+  assert.match(started.text, /local Git safety baseline/i)
   await controller.initExperiment({ name: 'discard', metric_name: 'score' })
   fs.writeFileSync(path.join(cwd, 'target.txt'), 'bad change\n')
   const logged = await controller.logExperiment({
@@ -530,7 +573,8 @@ test('discard restores worktree changes while preserving autoresearch artifacts'
     asi: { hypothesis: 'bad', rollback_reason: 'worse' },
   })
   assert.equal(logged.ok, true)
-  assert.equal(fs.readFileSync(path.join(cwd, 'target.txt'), 'utf8'), 'baseline\n')
+  assert.equal(fs.readFileSync(path.join(cwd, 'target.txt'), 'utf8'), 'user work before autoresearch\n')
+  assert.equal(fs.readFileSync(path.join(cwd, 'notes.txt'), 'utf8'), 'untracked user note\n')
   assert.equal(fs.existsSync(path.join(cwd, '.auto', 'log.jsonl')), true)
   await controller.close()
 })
@@ -561,7 +605,7 @@ test('failed correctness checks cannot be kept and are reverted when logged', as
   })
   assert.equal(logged.ok, true)
   assert.equal(fs.readFileSync(path.join(cwd, 'target.txt'), 'utf8'), 'baseline\n')
-  assert.equal(git(cwd, 'log', '-1', '--pretty=%s'), 'initial')
+  assert.match(git(cwd, 'log', '-1', '--pretty=%s'), /autoresearch safety baseline/i)
   await controller.close()
 })
 
@@ -604,9 +648,19 @@ test('workingDir keeps config at the workspace root and experiment artifacts in 
   const controller = new AutoresearchController({ cwd, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-state-')) })
   assert.equal((await controller.control({ args: 'redirected' })).ok, true)
   assert.equal((await controller.initExperiment({ name: 'redirected', metric_name: 'score' })).ok, true)
+  fs.writeFileSync(path.join(workDir, 'candidate.txt'), 'keep me\n')
+  const kept = await controller.logExperiment({
+    metric: 1,
+    status: 'keep',
+    description: 'scoped change',
+    asi: { hypothesis: 'workingDir is isolated' },
+  })
+  assert.equal(kept.ok, true)
   assert.equal(fs.existsSync(path.join(workDir, '.auto', 'log.jsonl')), true)
   assert.equal(fs.existsSync(path.join(workDir, '.auto', 'config.json')), false)
   assert.equal(fs.existsSync(path.join(cwd, '.auto', 'config.json')), true)
+  assert.equal(git(root, 'ls-files', '--', 'control/.auto/config.json'), '')
+  assert.match(git(root, 'status', '--short', '--', 'control/.auto/config.json'), /^\?\? /)
   await controller.close()
 })
 

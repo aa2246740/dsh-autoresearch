@@ -431,7 +431,13 @@ export class AutoresearchController {
   gitSafety() {
     const workDir = this.workDir();
     if (!fs.existsSync(workDir) || !fs.statSync(workDir).isDirectory()) {
-      return { ok: false, workDir, allowNoGit: false, error: `workingDir ${workDir} does not exist or is not a directory.` };
+      return {
+        ok: false,
+        code: "working-dir-missing",
+        workDir,
+        allowNoGit: false,
+        error: `The selected project folder does not exist or is not a directory: ${workDir}`,
+      };
     }
     const allowNoGit = this.config().allowNoGit === true;
     if (allowNoGit) {
@@ -442,12 +448,137 @@ export class AutoresearchController {
     if (result.error || result.status !== 0 || lines[0] !== "true") {
       return {
         ok: false,
+        code: "git-setup-required",
         workDir,
         allowNoGit,
-        error: `Autoresearch requires workingDir to be inside a git working tree so keep/discard can commit or revert safely. Initialize git or set { "allowNoGit": true } in .auto/config.json only for throwaway sessions.`,
+        error: "Local version protection has not been set up for this project yet.",
+      };
+    }
+    const head = runGit(workDir, ["rev-parse", "--verify", "HEAD"], { allowFailure: true });
+    if (head.error || head.status !== 0) {
+      return {
+        ok: false,
+        code: "git-baseline-required",
+        workDir,
+        gitRoot: lines[1],
+        allowNoGit,
+        error: "Local version protection needs an initial safety baseline.",
       };
     }
     return { ok: true, workDir, gitRoot: lines[1], allowNoGit };
+  }
+
+  prepareGitSafety() {
+    const workDir = this.workDir();
+    if (!fs.existsSync(workDir) || !fs.statSync(workDir).isDirectory()) return this.gitSafety();
+    const allowNoGit = this.config().allowNoGit === true;
+    if (allowNoGit) return this.gitSafety();
+
+    let initialized = false;
+    let probe = runGit(workDir, ["rev-parse", "--is-inside-work-tree", "--show-toplevel"], { allowFailure: true });
+    let lines = String(probe.stdout || "").trim().split(/\r?\n/).filter(Boolean);
+    if (probe.error || probe.status !== 0 || lines[0] !== "true") {
+      const created = runGit(workDir, ["init", "-q"], { allowFailure: true });
+      if (created.error || created.status !== 0) {
+        const reason = created.error?.message || `${created.stdout || ""}${created.stderr || ""}`.trim();
+        return {
+          ok: false,
+          code: "git-setup-failed",
+          workDir,
+          allowNoGit: false,
+          error: `Could not enable local version protection automatically. Check that Git is installed and this folder is writable, then retry.${reason ? ` (${reason})` : ""}`,
+        };
+      }
+      initialized = true;
+      probe = runGit(workDir, ["rev-parse", "--is-inside-work-tree", "--show-toplevel"], { allowFailure: true });
+      lines = String(probe.stdout || "").trim().split(/\r?\n/).filter(Boolean);
+    }
+
+    const head = runGit(workDir, ["rev-parse", "--verify", "HEAD"], { allowFailure: true });
+    const status = runGit(workDir, ["status", "--porcelain=v1", "--untracked-files=all", "--", "."], { allowFailure: true });
+    if (status.error || status.status !== 0) {
+      const reason = status.error?.message || `${status.stdout || ""}${status.stderr || ""}`.trim();
+      return {
+        ok: false,
+        code: "git-setup-failed",
+        workDir,
+        allowNoGit: false,
+        error: `Could not inspect the project for local version protection.${reason ? ` (${reason})` : ""}`,
+      };
+    }
+    const needsBaseline = head.error || head.status !== 0 || String(status.stdout || "").trim().length > 0;
+    if (!needsBaseline) {
+      return { ok: true, workDir, gitRoot: lines[1], allowNoGit: false, initialized, baselineCreated: false };
+    }
+
+    const identity = [
+      ["user.name", "DSH Autoresearch"],
+      ["user.email", "autoresearch@local.invalid"],
+    ];
+    const configuredIdentity = [];
+    for (const [key, fallback] of identity) {
+      const existing = runGit(workDir, ["config", "--get", key], { allowFailure: true });
+      if (existing.status === 0 && String(existing.stdout || "").trim()) continue;
+      const configured = runGit(workDir, ["config", "--local", key, fallback], { allowFailure: true });
+      if (configured.error || configured.status !== 0) {
+        const reason = configured.error?.message || `${configured.stdout || ""}${configured.stderr || ""}`.trim();
+        return {
+          ok: false,
+          code: "git-identity-setup-failed",
+          workDir,
+          allowNoGit: false,
+          error: `Could not configure a local-only Git identity for Autoresearch.${reason ? ` (${reason})` : ""}`,
+        };
+      }
+      configuredIdentity.push(key);
+    }
+
+    const hasChanges = String(status.stdout || "").trim().length > 0;
+    if (hasChanges) {
+      const staged = runGit(workDir, ["add", "-A", "--", "."], { allowFailure: true });
+      if (staged.error || staged.status !== 0) {
+        const reason = staged.error?.message || `${staged.stdout || ""}${staged.stderr || ""}`.trim();
+        return {
+          ok: false,
+          code: "git-baseline-failed",
+          workDir,
+          allowNoGit: false,
+          error: `Could not save the project's local safety baseline.${reason ? ` (${reason})` : ""}`,
+        };
+      }
+    }
+
+    const commitArgs = [
+      "-c", "commit.gpgSign=false",
+      "commit", "--no-verify", "-q",
+      "-m", "chore: create autoresearch safety baseline",
+    ];
+    if (hasChanges) commitArgs.push("--", ".");
+    else commitArgs.push("--allow-empty");
+    const committed = runGit(workDir, commitArgs, { allowFailure: true });
+    if (committed.error || committed.status !== 0) {
+      const reason = committed.error?.message || `${committed.stdout || ""}${committed.stderr || ""}`.trim();
+      return {
+        ok: false,
+        code: "git-baseline-failed",
+        workDir,
+        allowNoGit: false,
+        error: `Could not save the project's local safety baseline.${reason ? ` (${reason})` : ""}`,
+      };
+    }
+
+    const commit = String(runGit(workDir, ["rev-parse", "--short=7", "HEAD"]).stdout).trim();
+    return {
+      ok: true,
+      workDir,
+      gitRoot: lines[1],
+      allowNoGit: false,
+      initialized,
+      baselineCreated: true,
+      configuredIdentity,
+      commit,
+      setupText: `Git: local Git safety baseline created (${commit}); nothing was uploaded.`,
+    };
   }
 
   async fireHook(event, extra) {
@@ -528,7 +659,7 @@ export class AutoresearchController {
     if (/^(start|resume)(?:\s|$)/i.test(text)) text = text.replace(/^(start|resume)\s*/i, "").trim();
     const inferred = inferAutoresearchConfigFromPrompt(text);
     const configNotes = inferred ? applyInferredAutoresearchConfig(this.cwd, inferred) : [];
-    const safety = this.gitSafety();
+    const safety = this.prepareGitSafety();
     if (!safety.ok) return { ok: false, active: false, text: safety.error, details: safety };
 
     const before = this.privateState().active ? { steer: null } : await this.fireHook("before", {
@@ -551,6 +682,7 @@ export class AutoresearchController {
         "Autoresearch is active.",
         text ? `Goal: ${text}` : "Resume the persisted goal and next hypothesis.",
         configNotes.length ? `Config: ${configNotes.join(", ")}.` : "",
+        safety.setupText ?? "",
         safety.warning ?? "",
         needsSetup
           ? "Setup is incomplete. Inspect the project, create .auto/prompt.md and a deterministic benchmark, then call init_experiment."
@@ -729,13 +861,13 @@ export class AutoresearchController {
     let resolvedCommit = String(commit).slice(0, 7);
     let gitText = "";
     if (!safety.allowNoGit && status === "keep") {
-      runGit(this.workDir(), ["add", "-A"]);
-      const diff = runGit(this.workDir(), ["diff", "--cached", "--quiet"], { allowFailure: true });
+      runGit(this.workDir(), ["add", "-A", "--", "."]);
+      const diff = runGit(this.workDir(), ["diff", "--cached", "--quiet", "--", "."], { allowFailure: true });
       if (diff.status === 0) {
         gitText = "Git: nothing to commit.";
       } else {
         const resultData = { status, [persisted.metricName || "metric"]: metric, ...secondaryMetrics };
-        runGit(this.workDir(), ["commit", "-m", `${description}\n\nResult: ${JSON.stringify(resultData)}`]);
+        runGit(this.workDir(), ["commit", "-m", `${description}\n\nResult: ${JSON.stringify(resultData)}`, "--", "."]);
         resolvedCommit = String(runGit(this.workDir(), ["rev-parse", "--short=7", "HEAD"]).stdout).trim();
         gitText = `Git: committed ${resolvedCommit}.`;
       }
@@ -922,4 +1054,3 @@ export class AutoresearchController {
     this.listeners.clear();
   }
 }
-

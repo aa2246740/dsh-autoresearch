@@ -215,6 +215,9 @@ function InitDockCard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | nul
         <div style={{ fontSize: 13, fontWeight: 600 }}>新开 Autoresearch</div>
         <div style={{ color: colors.muted, fontSize: 12 }}>确认前不会开跑</div>
       </div>
+      <div data-autoresearch="git-safety-note" style={{ color: colors.muted, fontSize: 12 }}>
+        首次使用会自动开启本地版本保护并保存当前状态；不会上传代码。
+      </div>
       <label style={{ display: 'grid', gap: 4, fontSize: 12, color: colors.muted }}>
         目标
         <textarea

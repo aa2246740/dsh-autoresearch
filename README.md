@@ -49,9 +49,9 @@ dshx start web dsh-autoresearch
 
 首页和侧栏**不会**常显「实验循环」。composer 工具行也没有常驻「新开 Autoresearch」按钮。
 
-1. 打开官方 Web，进入一个会话（最好是干净的 git worktree）。
+1. 打开官方 Web，进入一个项目会话；用户不需要预先配置 Git。
 2. 在输入框输入 `/autoresearch`，选 **新开一次 Autoresearch**。输入框正上方出现引导卡（不是全屏 overlay，不挡上面的 Agent 输出）。
-3. 卡上只填两件事：目标（自然语言，和 grok-autoresearch 的 `/autoresearch <goal>` 一样）和轮次。不要填主指标、方向、measure.sh。点 **确认并开始** 才会执行。
+3. 卡上只填两件事：目标（自然语言，和 grok-autoresearch 的 `/autoresearch <goal>` 一样）和轮次。不要填主指标、方向、measure.sh。点 **确认并开始** 后，插件会在需要时自动开启本地 Git 保护、补齐仅限该项目的身份并保存当前状态为基线；不会上传代码。
 4. 确认后 dock 收起（最多留一句「等 agent 在对话里对齐需求」）。此时没有进度卡；agent 可以先在对话里对齐需求。
 5. 第一次 `run_experiment` 才出现一行 `running…`。第一次 `log_experiment` 入账后出现一张人话进度卡（Runs / kept / discarded / Baseline / Progress Δ% / 短表）。没有第二层「更大视图」。
 
@@ -68,10 +68,10 @@ dshx start web dsh-autoresearch
 | `.auto/log.jsonl` | 权威结果日志 |
 | `.auto/ideas.md` | 想法积压 |
 | `.auto/checks.sh` | 可选正确性检查；失败不能 keep |
-| `.auto/config.json` | `maxIterations`、`maxAutoResumeTurns`、`workingDir`、`allowNoGit` |
+| `.auto/config.json` | `maxIterations`、`maxAutoResumeTurns`、`workingDir`；普通用户无需配置 Git |
 | `.auto/hooks/{before,after}.sh` | 可选生命周期钩子（stdin 为 JSON） |
 
-循环会改仓库并提交。用干净 worktree、先写 checks、先定轮数。
+循环会在本地提交有效实验，并回滚无效实验。首次确认时会先保护当前状态；远端上传仍然必须由用户另行明确执行。
 
 ## 模型面工具
 
