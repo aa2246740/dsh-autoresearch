@@ -6,7 +6,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { AutoresearchController, inferAutoresearchConfigFromPrompt } from '../src/controller.ts'
-import { protectedPathsFromSession } from '../src/index.ts'
+import { mutationPathsFromToolCall, protectedPathsFromSession } from '../src/index.ts'
 import { reconstructJsonlState } from '../src/jsonl.ts'
 import { appendHookLogEntryIfConfigured, runHook } from '../src/hooks.ts'
 import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from '../src/compaction.ts'
@@ -19,6 +19,7 @@ import {
   buildStartLine,
   cancelInitDock,
   emptyDraft,
+  friendlyStartError,
   getLabState,
   hideAfterConfirm,
   parseRoundBudget,
@@ -88,6 +89,8 @@ function emptySnapshot(overrides: Partial<AutoresearchSnapshot> = {}): Autoresea
     gitOk: true,
     gitError: null,
     allowNoGit: false,
+    protectionMode: 'git',
+    protectedPathCount: 0,
     name: null,
     metricName: 'metric',
     metricUnit: '',
@@ -155,6 +158,12 @@ test('init draft has no metric, direction, measure, or allowNoGit fields', () =>
   assert.equal('allowNoGit' in draft, false)
   assert.equal('success' in draft, false)
   assert.doesNotMatch(JSON.stringify(draft), /gemini|google|minimax-cn|MINIMAXCN/i)
+})
+
+test('the beginner start card never exposes internal Git or process errors', () => {
+  const message = friendlyStartError(new Error('Could not inspect project (spawnSync git ENOBUFS)'))
+  assert.match(message, /自动准备没有完成/)
+  assert.doesNotMatch(message, /git|spawn|enobufs|error/i)
 })
 
 test('status snapshots do not open a progress dock', () => {
@@ -443,12 +452,78 @@ test('controller automatically creates a local Git safety baseline for beginners
   assert.equal(started.ok, true)
   assert.equal(git(cwd, 'rev-parse', '--is-inside-work-tree'), 'true')
   assert.match(git(cwd, 'log', '-1', '--pretty=%s'), /autoresearch safety baseline/i)
-  assert.match(started.text, /local Git safety baseline/i)
+  assert.match(started.text, /本地保护/)
 
   fs.writeFileSync(path.join(cwd, 'target.txt'), 'candidate\n')
   git(cwd, 'checkout', '--', 'target.txt')
   assert.equal(fs.readFileSync(path.join(cwd, 'target.txt'), 'utf8'), 'before autoresearch\n')
   await controller.close()
+})
+
+test('empty startup scope stays fast and learns the first edited file before mutation', async (t) => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-deferred-scope-'))
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-deferred-state-'))
+  t.after(() => {
+    fs.rmSync(cwd, { recursive: true, force: true })
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  })
+  fs.mkdirSync(path.join(cwd, 'project'))
+  fs.writeFileSync(path.join(cwd, 'project', 'target.txt'), 'before\n')
+  fs.mkdirSync(path.join(cwd, 'large-neighbor'))
+  for (let index = 0; index < 2_000; index += 1) {
+    fs.writeFileSync(path.join(cwd, 'large-neighbor', `${index}.txt`), 'unrelated\n')
+  }
+
+  const controller = new AutoresearchController({ cwd, dataDir })
+  const started = await controller.control({ args: 'make the target faster', protectedPaths: [] } as never)
+  assert.equal(started.ok, true)
+  assert.deepEqual(controller.privateState().protectedPaths, [])
+  assert.equal(git(cwd, 'show', '--name-only', '--pretty=format:', 'HEAD'), '')
+
+  const protectedResult = controller.protectPathsBeforeMutation(['project/target.txt'])
+  assert.equal(protectedResult.ok, true)
+  assert.deepEqual(controller.privateState().protectedPaths, ['project/target.txt'])
+  fs.writeFileSync(path.join(cwd, 'project', 'target.txt'), 'candidate\n')
+  await controller.initExperiment({ name: 'dynamic scope', metric_name: 'score' })
+  const discarded = await controller.logExperiment({ metric: 2, status: 'discard', description: 'worse' })
+  assert.equal(discarded.ok, true)
+  assert.equal(fs.readFileSync(path.join(cwd, 'project', 'target.txt'), 'utf8'), 'before\n')
+  assert.equal(fs.readFileSync(path.join(cwd, 'large-neighbor', '1999.txt'), 'utf8'), 'unrelated\n')
+  await controller.close()
+})
+
+test('missing Git silently falls back to local snapshots and still restores edits', async (t) => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-snapshot-fallback-'))
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-snapshot-state-'))
+  const emptyPath = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-empty-path-'))
+  t.after(() => {
+    fs.rmSync(cwd, { recursive: true, force: true })
+    fs.rmSync(dataDir, { recursive: true, force: true })
+    fs.rmSync(emptyPath, { recursive: true, force: true })
+  })
+  fs.writeFileSync(path.join(cwd, 'target.txt'), 'before\n')
+  const previousPath = process.env.PATH
+  process.env.PATH = emptyPath
+  try {
+    const controller = new AutoresearchController({ cwd, dataDir })
+    const started = await controller.control({ args: 'optimize this', protectedPaths: ['target.txt'] } as never)
+    assert.equal(started.ok, true)
+    assert.equal(started.active, true)
+    assert.equal(controller.privateState().protectionMode, 'snapshot')
+    assert.doesNotMatch(started.text, /git|enoent|spawn|failed/i)
+    assert.match(started.text, /本地保护/)
+
+    fs.writeFileSync(path.join(cwd, 'target.txt'), 'candidate\n')
+    await controller.initExperiment({ name: 'snapshot fallback', metric_name: 'score' })
+    const discarded = await controller.logExperiment({ metric: 2, status: 'discard', description: 'worse' })
+    assert.equal(discarded.ok, true)
+    assert.equal(fs.readFileSync(path.join(cwd, 'target.txt'), 'utf8'), 'before\n')
+    assert.doesNotMatch(discarded.text, /git|enoent|spawn|failed/i)
+    await controller.close()
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+  }
 })
 
 test('automatic setup protects the session working set without scanning an umbrella workspace', async (t) => {
@@ -518,6 +593,56 @@ test('session diff metadata selects only files inside the current workspace', ()
   assert.deepEqual(protectedPathsFromSession(session, cwd), ['new-benchmark.js', 'ink-particle-wall.html'])
 })
 
+test('pre-execute mutation path extraction covers edit tools and patch payloads', () => {
+  const cwd = '/workspace'
+  assert.deepEqual(mutationPathsFromToolCall('edit', { file_path: '/workspace/src/app.ts' }, cwd), ['src/app.ts'])
+  assert.deepEqual(mutationPathsFromToolCall('search_replace', { path: 'src/score.ts' }, cwd), ['src/score.ts'])
+  assert.deepEqual(mutationPathsFromToolCall('apply_patch', {
+    patch: [
+      '*** Update File: src/one.ts',
+      '*** Add File: src/two.ts',
+      '*** Delete File: ../outside.ts',
+    ].join('\n'),
+  }, cwd), ['src/one.ts', 'src/two.ts'])
+  assert.deepEqual(mutationPathsFromToolCall('read', { path: 'src/app.ts' }, cwd), [])
+})
+
+test('a newly created file is learned before write and removed on discard', async () => {
+  const cwd = createGitFixture()
+  const controller = new AutoresearchController({ cwd, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-state-')) })
+  await controller.control({ args: 'try a generated helper for 1 run' })
+  await controller.initExperiment({ name: 'new file rollback', metric_name: 'score' })
+  const protectedResult = controller.protectPathsBeforeMutation(['src/generated.ts'])
+  assert.equal(protectedResult.ok, true)
+  fs.mkdirSync(path.join(cwd, 'src'), { recursive: true })
+  fs.writeFileSync(path.join(cwd, 'src', 'generated.ts'), 'export const candidate = true\n')
+  const discarded = await controller.logExperiment({ metric: 9, status: 'discard', description: 'generated helper was slower' })
+  assert.equal(discarded.ok, true)
+  assert.equal(fs.existsSync(path.join(cwd, 'src', 'generated.ts')), false)
+  await controller.close()
+})
+
+test('pre-existing dirty work switches to snapshots without committing or changing the index', async () => {
+  const cwd = createGitFixture()
+  fs.writeFileSync(path.join(cwd, 'target.txt'), 'user work before autoresearch\n')
+  fs.writeFileSync(path.join(cwd, 'staged.txt'), 'already staged\n')
+  git(cwd, 'add', 'staged.txt')
+  const beforeIndex = git(cwd, 'diff', '--cached', '--name-only')
+  const controller = new AutoresearchController({ cwd, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-state-')) })
+  const started = await controller.control({ args: 'optimize only target', protectedPaths: ['target.txt'] } as never)
+  assert.equal(started.ok, true)
+  assert.equal(controller.privateState().protectionMode, 'snapshot')
+  assert.equal(git(cwd, 'log', '-1', '--pretty=%s'), 'initial')
+  assert.equal(git(cwd, 'diff', '--cached', '--name-only'), beforeIndex)
+  await controller.initExperiment({ name: 'dirty safety', metric_name: 'score' })
+  fs.writeFileSync(path.join(cwd, 'target.txt'), 'bad candidate\n')
+  const discarded = await controller.logExperiment({ metric: 99, status: 'discard', description: 'worse' })
+  assert.equal(discarded.ok, true)
+  assert.equal(fs.readFileSync(path.join(cwd, 'target.txt'), 'utf8'), 'user work before autoresearch\n')
+  assert.equal(git(cwd, 'diff', '--cached', '--name-only'), beforeIndex)
+  await controller.close()
+})
+
 test('automatic setup supplies a repository-local identity when Git has none', async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-no-identity-'))
   const previousGlobal = process.env.GIT_CONFIG_GLOBAL
@@ -540,14 +665,15 @@ test('automatic setup supplies a repository-local identity when Git has none', a
   }
 })
 
-test('allowNoGit remains an explicit advanced escape hatch', async () => {
+test('allowNoGit skips Git but retains automatic snapshot protection', async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-allow-no-git-'))
   fs.mkdirSync(path.join(cwd, '.auto'), { recursive: true })
   fs.writeFileSync(path.join(cwd, '.auto', 'config.json'), '{"allowNoGit":true}\n')
   const controller = new AutoresearchController({ cwd, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-state-')) })
   const started = await controller.control({ args: 'optimize this' })
   assert.equal(started.ok, true)
-  assert.match(started.text, /allowNoGit=true/)
+  assert.match(started.text, /本地保护/)
+  assert.equal(controller.privateState().protectionMode, 'snapshot')
   assert.equal(fs.existsSync(path.join(cwd, '.git')), false)
   await controller.close()
 })
@@ -630,7 +756,7 @@ test('discard restores worktree changes while preserving autoresearch artifacts'
   fs.writeFileSync(path.join(cwd, 'notes.txt'), 'untracked user note\n')
   const controller = new AutoresearchController({ cwd, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-state-')) })
   const started = await controller.control({ args: 'test one idea' })
-  assert.match(started.text, /local Git safety baseline/i)
+  assert.match(started.text, /本地保护/)
   await controller.initExperiment({ name: 'discard', metric_name: 'score' })
   fs.writeFileSync(path.join(cwd, 'target.txt'), 'bad change\n')
   const logged = await controller.logExperiment({
@@ -673,7 +799,7 @@ test('failed correctness checks cannot be kept and are reverted when logged', as
   })
   assert.equal(logged.ok, true)
   assert.equal(fs.readFileSync(path.join(cwd, 'target.txt'), 'utf8'), 'baseline\n')
-  assert.match(git(cwd, 'log', '-1', '--pretty=%s'), /autoresearch safety baseline/i)
+  assert.equal(git(cwd, 'log', '-1', '--pretty=%s'), 'initial')
   await controller.close()
 })
 

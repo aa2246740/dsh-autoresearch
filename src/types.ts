@@ -29,6 +29,7 @@ export interface PrivateState {
   lastRunChecks: { pass: boolean; output: string; duration: number } | null
   lastRunDuration: number | null
   protectedPaths: string[]
+  protectionMode: 'pending' | 'git' | 'snapshot'
   updatedAt: number
   resumedAt?: number
 }
@@ -45,6 +46,7 @@ export interface ToolResult {
   text: string
   active?: boolean
   needsSetup?: boolean
+  needsDecision?: boolean
   action?: string
   code?: string
   warning?: string | null
@@ -72,6 +74,8 @@ export interface AutoresearchSnapshot {
   gitOk: boolean
   gitError: string | null
   allowNoGit: boolean
+  protectionMode: 'pending' | 'git' | 'snapshot'
+  protectedPathCount: number
   name: string | null
   metricName: string
   metricUnit: string

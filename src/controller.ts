@@ -17,6 +17,12 @@ const DISPLAY_MAX_LINES = 80;
 const DISPLAY_MAX_BYTES = 64 * 1024;
 const FULL_OUTPUT_THRESHOLD = 64 * 1024;
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+const INITIAL_SCOPE_MAX_FILES = 256;
+const INITIAL_SCOPE_MAX_BYTES = 64 * 1024 * 1024;
+const INITIAL_SCOPE_MAX_DIRS = 96;
+const INITIAL_SCOPE_IGNORED_DIRS = new Set([
+  ".auto", ".git", ".hg", ".svn", "node_modules", "vendor", "dist", "build", "coverage", ".next", ".turbo",
+]);
 
 function objectRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -88,7 +94,12 @@ function shellQuote(value) {
 }
 
 function runGit(cwd, args, { allowFailure = false } = {}) {
-  const result = spawnSync("git", args, { cwd, encoding: "utf8", timeout: 15_000 });
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    timeout: 15_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
   if (!allowFailure && (result.error || result.status !== 0)) {
     const reason = result.error?.message || `${result.stdout || ""}${result.stderr || ""}`.trim();
     throw new Error(`git ${args[0]} failed: ${reason || `exit ${result.status}`}`);
@@ -114,7 +125,60 @@ function normalizeProtectedPaths(workDir, candidates) {
 }
 
 function gitPathspecs(paths) {
-  return paths.length ? paths.map((value) => `:(literal)${value}`) : ["."];
+  return paths.map((value) => `:(literal)${value}`);
+}
+
+/**
+ * Pick a bounded beginner-friendly starting scope. Small projects are covered
+ * automatically. In an umbrella workspace we retain only root files and learn
+ * nested files lazily from pre-execute hooks, so startup never scans everything.
+ */
+function discoverInitialProtectedPaths(workDir) {
+  const rootFiles = [];
+  const discovered = [];
+  const queue = [workDir];
+  let directoryCount = 0;
+  let totalBytes = 0;
+  let overflowed = false;
+  while (queue.length && !overflowed) {
+    const directory = queue.shift();
+    directoryCount += 1;
+    if (directoryCount > INITIAL_SCOPE_MAX_DIRS) {
+      overflowed = true;
+      break;
+    }
+    let entries;
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      if (entry.name === ".DS_Store") continue;
+      const absolute = path.join(directory, entry.name);
+      const relative = path.relative(workDir, absolute).split(path.sep).join("/");
+      if (entry.isDirectory()) {
+        if (!INITIAL_SCOPE_IGNORED_DIRS.has(entry.name)) queue.push(absolute);
+        continue;
+      }
+      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+      let size = 0;
+      try { size = entry.isFile() ? fs.lstatSync(absolute).size : 0; } catch { continue; }
+      if (size > INITIAL_SCOPE_MAX_BYTES) {
+        overflowed = true;
+        break;
+      }
+      if (directory === workDir) rootFiles.push(relative);
+      discovered.push(relative);
+      totalBytes += size;
+      if (discovered.length > INITIAL_SCOPE_MAX_FILES || totalBytes > INITIAL_SCOPE_MAX_BYTES) {
+        overflowed = true;
+        break;
+      }
+    }
+  }
+  return overflowed ? rootFiles.slice(0, INITIAL_SCOPE_MAX_FILES) : discovered;
 }
 
 function trimTail(text, maxLines, maxBytes) {
@@ -304,6 +368,7 @@ function defaultPrivateState(cwd, workDir) {
     lastRunChecks: null,
     lastRunDuration: null,
     protectedPaths: [],
+    protectionMode: "pending",
     updatedAt: Date.now(),
   };
 }
@@ -371,6 +436,115 @@ export class AutoresearchController {
 
   protectionPathspecs(candidates = this.privateState().protectedPaths) {
     return gitPathspecs(this.protectedPaths(candidates));
+  }
+
+  snapshotRoot() {
+    return `${this.statePath()}.snapshots`;
+  }
+
+  snapshotManifestPath() {
+    return path.join(this.snapshotRoot(), "manifest.json");
+  }
+
+  snapshotManifest() {
+    const value = readJson(this.snapshotManifestPath(), { version: 1, files: {} });
+    return {
+      version: 1,
+      files: objectRecord(value.files) ? value.files : {},
+    };
+  }
+
+  captureSnapshots(candidates, { overwrite = false } = {}) {
+    const paths = this.protectedPaths(candidates);
+    const manifest = this.snapshotManifest();
+    const warnings = [];
+    try {
+      fs.mkdirSync(path.join(this.snapshotRoot(), "blobs"), { recursive: true, mode: 0o700 });
+      fs.chmodSync(this.snapshotRoot(), 0o700);
+    } catch {
+      return { ok: false, paths, warnings: paths };
+    }
+    for (const portable of paths) {
+      if (!overwrite && manifest.files[portable]) continue;
+      const absolute = path.join(this.workDir(), ...portable.split("/"));
+      let stat;
+      try {
+        stat = fs.lstatSync(absolute);
+      } catch (error) {
+        if (error?.code === "ENOENT") {
+          manifest.files[portable] = { kind: "missing" };
+          continue;
+        }
+        warnings.push(portable);
+        continue;
+      }
+      if (stat.isSymbolicLink()) {
+        try {
+          manifest.files[portable] = { kind: "symlink", target: fs.readlinkSync(absolute) };
+        } catch {
+          warnings.push(portable);
+        }
+        continue;
+      }
+      if (!stat.isFile()) {
+        warnings.push(portable);
+        continue;
+      }
+      const blob = createHash("sha256").update(portable).digest("hex");
+      try {
+        const blobPath = path.join(this.snapshotRoot(), "blobs", blob);
+        fs.copyFileSync(absolute, blobPath);
+        fs.chmodSync(blobPath, 0o600);
+        manifest.files[portable] = { kind: "file", blob, mode: stat.mode & 0o777 };
+      } catch {
+        warnings.push(portable);
+      }
+    }
+    try {
+      writeJsonAtomic(this.snapshotManifestPath(), manifest);
+    } catch {
+      return { ok: false, paths, warnings: paths };
+    }
+    return { ok: warnings.length === 0, paths, warnings };
+  }
+
+  restoreSnapshots(candidates = this.privateState().protectedPaths) {
+    const paths = this.protectedPaths(candidates);
+    const manifest = this.snapshotManifest();
+    const warnings = [];
+    for (const portable of paths) {
+      const entry = manifest.files[portable];
+      if (!objectRecord(entry)) {
+        warnings.push(portable);
+        continue;
+      }
+      const absolute = path.join(this.workDir(), ...portable.split("/"));
+      let current = null;
+      try { current = fs.lstatSync(absolute); } catch (error) { if (error?.code !== "ENOENT") warnings.push(portable); }
+      if (current?.isDirectory()) {
+        warnings.push(portable);
+        continue;
+      }
+      try {
+        if (current) fs.unlinkSync(absolute);
+        if (entry.kind === "missing") continue;
+        ensureParentDir(absolute);
+        if (entry.kind === "symlink") {
+          fs.symlinkSync(String(entry.target), absolute);
+          continue;
+        }
+        if (entry.kind === "file") {
+          const blobPath = path.join(this.snapshotRoot(), "blobs", String(entry.blob));
+          fs.copyFileSync(blobPath, absolute);
+          if (Number.isInteger(entry.mode)) fs.chmodSync(absolute, entry.mode);
+          continue;
+        }
+        warnings.push(portable);
+      } catch {
+        warnings.push(portable);
+      }
+    }
+    return { ok: warnings.length === 0, paths, warnings };
   }
 
   statePath() {
@@ -460,49 +634,105 @@ export class AutoresearchController {
 
   gitSafety() {
     const workDir = this.workDir();
-    if (!fs.existsSync(workDir) || !fs.statSync(workDir).isDirectory()) {
+    let directoryOk = false;
+    try { directoryOk = fs.statSync(workDir).isDirectory(); } catch {}
+    if (!directoryOk) {
       return {
         ok: false,
         code: "working-dir-missing",
         workDir,
         allowNoGit: false,
-        error: `The selected project folder does not exist or is not a directory: ${workDir}`,
+        needsDecision: true,
+        error: `项目目录不可用，请重新选择一个可写的项目目录：${workDir}`,
       };
     }
+    const privateState = this.privateState();
     const allowNoGit = this.config().allowNoGit === true;
-    if (allowNoGit) {
-      return { ok: true, workDir, allowNoGit, warning: "allowNoGit=true: git keep/discard protection is disabled." };
+    if (allowNoGit || privateState.protectionMode === "snapshot") {
+      return {
+        ok: true,
+        workDir,
+        allowNoGit,
+        protectionMode: "snapshot",
+        protectedPaths: this.protectedPaths(),
+      };
+    }
+    if (privateState.protectionMode === "pending") {
+      return {
+        ok: true,
+        workDir,
+        allowNoGit,
+        protectionMode: "pending",
+        protectedPaths: this.protectedPaths(),
+      };
     }
     const result = runGit(workDir, ["rev-parse", "--is-inside-work-tree", "--show-toplevel"], { allowFailure: true });
     const lines = String(result.stdout || "").trim().split(/\r?\n/).filter(Boolean);
     if (result.error || result.status !== 0 || lines[0] !== "true") {
       return {
-        ok: false,
-        code: "git-setup-required",
+        ok: true,
         workDir,
         allowNoGit,
-        error: "Local version protection has not been set up for this project yet.",
+        protectionMode: "snapshot",
+        protectedPaths: this.protectedPaths(),
       };
     }
     const head = runGit(workDir, ["rev-parse", "--verify", "HEAD"], { allowFailure: true });
     if (head.error || head.status !== 0) {
       return {
-        ok: false,
-        code: "git-baseline-required",
+        ok: true,
         workDir,
         gitRoot: lines[1],
         allowNoGit,
-        error: "Local version protection needs an initial safety baseline.",
+        protectionMode: "snapshot",
+        protectedPaths: this.protectedPaths(),
       };
     }
-    return { ok: true, workDir, gitRoot: lines[1], allowNoGit, protectedPaths: this.protectedPaths() };
+    return {
+      ok: true,
+      workDir,
+      gitRoot: lines[1],
+      allowNoGit,
+      protectionMode: "git",
+      protectedPaths: this.protectedPaths(),
+    };
   }
 
   prepareGitSafety(proposedProtectedPaths: string[] = []) {
     const workDir = this.workDir();
-    if (!fs.existsSync(workDir) || !fs.statSync(workDir).isDirectory()) return this.gitSafety();
+    let directoryOk = false;
+    try { directoryOk = fs.statSync(workDir).isDirectory(); } catch {}
+    if (!directoryOk) return this.gitSafety();
+    let protectedPaths = this.protectedPaths(proposedProtectedPaths);
+    if (protectedPaths.length === 0) {
+      const existing = this.protectedPaths();
+      protectedPaths = existing.length ? existing : this.protectedPaths(discoverInitialProtectedPaths(workDir));
+    }
+    const captured = this.captureSnapshots(protectedPaths);
+    const fallback = (reason = null) => ({
+      ok: true,
+      workDir,
+      allowNoGit: this.config().allowNoGit === true,
+      protectionMode: "snapshot",
+      protectedPaths,
+      protectionFallback: true,
+      internalReason: reason,
+      setupText: protectedPaths.length
+        ? "已自动保存本地保护点；代码不会上传。"
+        : "本地保护已就绪；首次修改文件前会自动保存保护点。",
+    });
+    if (!captured.ok) {
+      return {
+        ok: false,
+        code: "protection-needs-confirmation",
+        needsDecision: true,
+        workDir,
+        protectedPaths,
+        error: `有 ${captured.warnings.length} 个特殊路径无法自动保护。请换到具体项目目录后重试。`,
+      };
+    }
     const allowNoGit = this.config().allowNoGit === true;
-    if (allowNoGit) return this.gitSafety();
+    if (allowNoGit) return fallback("git-disabled-by-config");
 
     let initialized = false;
     let probe = runGit(workDir, ["rev-parse", "--is-inside-work-tree", "--show-toplevel"], { allowFailure: true });
@@ -511,48 +741,73 @@ export class AutoresearchController {
       const created = runGit(workDir, ["init", "-q"], { allowFailure: true });
       if (created.error || created.status !== 0) {
         const reason = created.error?.message || `${created.stdout || ""}${created.stderr || ""}`.trim();
-        return {
-          ok: false,
-          code: "git-setup-failed",
-          workDir,
-          allowNoGit: false,
-          error: `Could not enable local version protection automatically. Check that Git is installed and this folder is writable, then retry.${reason ? ` (${reason})` : ""}`,
-        };
+        return fallback(reason || "local-version-tool-unavailable");
       }
       initialized = true;
       probe = runGit(workDir, ["rev-parse", "--is-inside-work-tree", "--show-toplevel"], { allowFailure: true });
       lines = String(probe.stdout || "").trim().split(/\r?\n/).filter(Boolean);
+      if (probe.error || probe.status !== 0 || lines[0] !== "true") {
+        return fallback(probe.error?.message || "local-version-probe-failed");
+      }
     }
 
-    const protectedPaths = this.protectedPaths(proposedProtectedPaths);
     const pathspecs = gitPathspecs(protectedPaths);
     const head = runGit(workDir, ["rev-parse", "--verify", "HEAD"], { allowFailure: true });
-    const staged = runGit(workDir, ["add", "-A", "--", ...pathspecs], { allowFailure: true });
-    if (staged.error || staged.status !== 0) {
-      const reason = staged.error?.message || `${staged.stdout || ""}${staged.stderr || ""}`.trim();
+    if (!initialized && !head.error && head.status === 0 && pathspecs.length) {
+      const unstaged = runGit(workDir, ["diff", "--quiet", "--", ...pathspecs], { allowFailure: true });
+      const stagedExisting = runGit(workDir, ["diff", "--cached", "--quiet", "--", ...pathspecs], { allowFailure: true });
+      const untracked = runGit(workDir, ["ls-files", "--others", "--exclude-standard", "-z", "--", ...pathspecs], { allowFailure: true });
+      const inspectionFailed = unstaged.error || stagedExisting.error || untracked.error
+        || ![0, 1].includes(unstaged.status) || ![0, 1].includes(stagedExisting.status) || untracked.status !== 0;
+      if (inspectionFailed) return fallback("existing-project-inspection-failed");
+      if (unstaged.status === 1 || stagedExisting.status === 1 || String(untracked.stdout || "").length > 0) {
+        return fallback("existing-project-local-work-preserved");
+      }
       return {
-        ok: false,
-        code: "git-baseline-failed",
+        ok: true,
         workDir,
+        gitRoot: lines[1],
         allowNoGit: false,
-        error: `Could not save the project's local safety baseline.${reason ? ` (${reason})` : ""}`,
+        initialized: false,
+        baselineCreated: false,
+        protectionMode: "git",
+        protectedPaths,
+        setupText: "本地保护已就绪；代码不会上传。",
       };
     }
-    const diff = runGit(workDir, ["diff", "--cached", "--quiet", "--", ...pathspecs], { allowFailure: true });
+    if (!initialized && (head.error || head.status !== 0)) {
+      return fallback("existing-project-without-baseline");
+    }
+    if (pathspecs.length) {
+      const staged = runGit(workDir, ["add", "-A", "--", ...pathspecs], { allowFailure: true });
+      if (staged.error || staged.status !== 0) {
+        const reason = staged.error?.message || `${staged.stdout || ""}${staged.stderr || ""}`.trim();
+        return fallback(reason || "local-baseline-stage-failed");
+      }
+    }
+    const diff = pathspecs.length
+      ? runGit(workDir, ["diff", "--cached", "--quiet", "--", ...pathspecs], { allowFailure: true })
+      : { status: 0, stdout: "", stderr: "", error: null };
     if (diff.error || (diff.status !== 0 && diff.status !== 1)) {
       const reason = diff.error?.message || `${diff.stdout || ""}${diff.stderr || ""}`.trim();
-      return {
-        ok: false,
-        code: "git-setup-failed",
-        workDir,
-        allowNoGit: false,
-        error: `Could not inspect the project for local version protection.${reason ? ` (${reason})` : ""}`,
-      };
+      return fallback(reason || "local-baseline-inspection-failed");
     }
     const hasChanges = diff.status === 1;
     const needsBaseline = head.error || head.status !== 0 || hasChanges;
     if (!needsBaseline) {
-      return { ok: true, workDir, gitRoot: lines[1], allowNoGit: false, initialized, baselineCreated: false, protectedPaths };
+      return {
+        ok: true,
+        workDir,
+        gitRoot: lines[1],
+        allowNoGit: false,
+        initialized,
+        baselineCreated: false,
+        protectionMode: "git",
+        protectedPaths,
+        setupText: protectedPaths.length
+          ? "本地保护已就绪；代码不会上传。"
+          : "本地保护已就绪；首次修改文件前会自动保存保护点。",
+      };
     }
 
     const identity = [
@@ -560,19 +815,13 @@ export class AutoresearchController {
       ["user.email", "autoresearch@local.invalid"],
     ];
     const configuredIdentity = [];
-    for (const [key, fallback] of identity) {
+    for (const [key, fallbackValue] of identity) {
       const existing = runGit(workDir, ["config", "--get", key], { allowFailure: true });
       if (existing.status === 0 && String(existing.stdout || "").trim()) continue;
-      const configured = runGit(workDir, ["config", "--local", key, fallback], { allowFailure: true });
+      const configured = runGit(workDir, ["config", "--local", key, fallbackValue], { allowFailure: true });
       if (configured.error || configured.status !== 0) {
         const reason = configured.error?.message || `${configured.stdout || ""}${configured.stderr || ""}`.trim();
-        return {
-          ok: false,
-          code: "git-identity-setup-failed",
-          workDir,
-          allowNoGit: false,
-          error: `Could not configure a local-only Git identity for Autoresearch.${reason ? ` (${reason})` : ""}`,
-        };
+        return fallback(reason || "local-identity-setup-failed");
       }
       configuredIdentity.push(key);
     }
@@ -587,16 +836,12 @@ export class AutoresearchController {
     const committed = runGit(workDir, commitArgs, { allowFailure: true });
     if (committed.error || committed.status !== 0) {
       const reason = committed.error?.message || `${committed.stdout || ""}${committed.stderr || ""}`.trim();
-      return {
-        ok: false,
-        code: "git-baseline-failed",
-        workDir,
-        allowNoGit: false,
-        error: `Could not save the project's local safety baseline.${reason ? ` (${reason})` : ""}`,
-      };
+      return fallback(reason || "local-baseline-commit-failed");
     }
 
-    const commit = String(runGit(workDir, ["rev-parse", "--short=7", "HEAD"]).stdout).trim();
+    const committedHead = runGit(workDir, ["rev-parse", "--short=7", "HEAD"], { allowFailure: true });
+    if (committedHead.error || committedHead.status !== 0) return fallback("local-baseline-head-failed");
+    const commit = String(committedHead.stdout || "").trim();
     return {
       ok: true,
       workDir,
@@ -604,11 +849,41 @@ export class AutoresearchController {
       allowNoGit: false,
       initialized,
       baselineCreated: true,
+      protectionMode: "git",
       protectedPaths,
       configuredIdentity,
       commit,
-      setupText: `Git: local Git safety baseline created (${commit}); nothing was uploaded.`,
+      setupText: "已自动保存本地保护点；代码不会上传。",
     };
+  }
+
+  protectPathsBeforeMutation(candidates: string[] = []) {
+    const current = this.privateState();
+    if (current.active !== true || current.manualOff === true) {
+      return { ok: true, active: false, protectedPaths: this.protectedPaths() };
+    }
+    const incoming = this.protectedPaths(candidates);
+    const known = new Set(this.protectedPaths(current.protectedPaths));
+    const added = incoming.filter((portable) => !known.has(portable));
+    if (added.length === 0) return { ok: true, active: true, protectedPaths: [...known] };
+
+    const captured = this.captureSnapshots(added);
+    if (!captured.ok) {
+      return {
+        ok: false,
+        needsDecision: true,
+        code: "protection-needs-confirmation",
+        text: `这个修改包含无法自动保护的特殊路径：${captured.warnings.join(", ")}`,
+      };
+    }
+    let protectionMode = current.protectionMode === "git" ? "git" : "snapshot";
+    if (protectionMode === "git") {
+      const prepared = this.prepareGitSafety(added);
+      protectionMode = prepared.protectionMode === "git" ? "git" : "snapshot";
+    }
+    const protectedPaths = [...known, ...added];
+    this.savePrivate({ protectedPaths, protectionMode });
+    return { ok: true, active: true, protectedPaths, protectionMode };
   }
 
   async fireHook(event, extra) {
@@ -690,7 +965,16 @@ export class AutoresearchController {
     const inferred = inferAutoresearchConfigFromPrompt(text);
     const configNotes = inferred ? applyInferredAutoresearchConfig(this.cwd, inferred) : [];
     const safety = this.prepareGitSafety(protectedPaths);
-    if (!safety.ok) return { ok: false, active: false, text: safety.error, details: safety };
+    if (!safety.ok) {
+      return {
+        ok: true,
+        active: false,
+        needsDecision: true,
+        action: "choose-project-folder",
+        text: safety.error,
+        details: safety,
+      };
+    }
 
     const before = this.privateState().active ? { steer: null } : await this.fireHook("before", {
       next_run: this.persisted().results.length + 1,
@@ -703,6 +987,7 @@ export class AutoresearchController {
       pendingResumeToken: null,
       hintsThisSession: 0,
       protectedPaths: safety.protectedPaths ?? this.protectedPaths(protectedPaths),
+      protectionMode: safety.protectionMode ?? "snapshot",
     });
     const logPath = sessionFilePath(this.workDir(), "log");
     const hasHeader = fs.existsSync(logPath) && hasAutoresearchConfigHeader(fs.readFileSync(logPath, "utf8"));
@@ -898,19 +1183,46 @@ export class AutoresearchController {
     let resolvedCommit = String(commit).slice(0, 7);
     let gitText = "";
     const pathspecs = this.protectionPathspecs();
-    if (!safety.allowNoGit && status === "keep") {
-      runGit(this.workDir(), ["add", "-A", "--", ...pathspecs]);
-      const diff = runGit(this.workDir(), ["diff", "--cached", "--quiet", "--", ...pathspecs], { allowFailure: true });
-      if (diff.status === 0) {
-        gitText = "Git: nothing to commit.";
-      } else {
+    let protectionMode = safety.protectionMode === "git" && privateState.protectionMode === "git" ? "git" : "snapshot";
+    if (status === "keep" && protectionMode === "git" && pathspecs.length) {
+      const staged = runGit(this.workDir(), ["add", "-A", "--", ...pathspecs], { allowFailure: true });
+      const diff = staged.error || staged.status !== 0
+        ? staged
+        : runGit(this.workDir(), ["diff", "--cached", "--quiet", "--", ...pathspecs], { allowFailure: true });
+      if (!diff.error && diff.status === 0) {
+        gitText = "本轮没有需要保存的代码变化。";
+      } else if (!diff.error && diff.status === 1) {
         const resultData = { status, [persisted.metricName || "metric"]: metric, ...secondaryMetrics };
-        runGit(this.workDir(), ["commit", "-m", `${description}\n\nResult: ${JSON.stringify(resultData)}`, "--", ...pathspecs]);
-        resolvedCommit = String(runGit(this.workDir(), ["rev-parse", "--short=7", "HEAD"]).stdout).trim();
-        gitText = `Git: committed ${resolvedCommit}.`;
+        const committed = runGit(this.workDir(), [
+          "-c", "commit.gpgSign=false",
+          "commit", "--no-verify", "-q",
+          "-m", `${description}\n\nResult: ${JSON.stringify(resultData)}`,
+          "--", ...pathspecs,
+        ], { allowFailure: true });
+        if (!committed.error && committed.status === 0) {
+          const head = runGit(this.workDir(), ["rev-parse", "--short=7", "HEAD"], { allowFailure: true });
+          if (!head.error && head.status === 0) resolvedCommit = String(head.stdout || "").trim();
+          gitText = "已保存本轮改进。";
+        } else {
+          protectionMode = "snapshot";
+          runGit(this.workDir(), ["reset", "-q", "HEAD", "--", ...pathspecs], { allowFailure: true });
+        }
+      } else {
+        protectionMode = "snapshot";
+        runGit(this.workDir(), ["reset", "-q", "HEAD", "--", ...pathspecs], { allowFailure: true });
       }
-    } else if (safety.allowNoGit) {
-      gitText = "Git protection disabled by allowNoGit=true.";
+    }
+    if (status === "keep") {
+      const refreshed = this.captureSnapshots(this.protectedPaths(), { overwrite: true });
+      if (!refreshed.ok) {
+        protectionMode = "snapshot";
+        gitText = `本轮已保留，但有 ${refreshed.warnings.length} 个特殊路径需要稍后确认。`;
+      } else if (!gitText) {
+        gitText = this.protectedPaths().length
+          ? "已保存本轮改进。"
+          : "本轮尚未改动源码，已继续运行。";
+      }
+      if (protectionMode !== privateState.protectionMode) this.savePrivate({ protectionMode });
     }
 
     const currentSegmentRuns = persisted.results.filter((run) => run.segment === persisted.currentSegment);
@@ -932,21 +1244,19 @@ export class AutoresearchController {
     fs.appendFileSync(jsonlPath, `${JSON.stringify(provisional)}\n`);
     this.notifyChange();
 
-    if (!safety.allowNoGit && status !== "keep") {
-      if (this.protectedPaths().length) {
-        runGit(this.workDir(), ["checkout", "--", ...pathspecs]);
-        runGit(this.workDir(), ["clean", "-fd", "--", ...pathspecs]);
-      } else {
-        runGit(this.workDir(), [
-          "checkout", "--", ".",
-          ":(exclude,glob)**/.auto", ":(exclude,glob)**/.auto/**",
-          ":(exclude,glob)**/autoresearch.*", ":(exclude,glob)**/autoresearch.*/**",
-        ]);
-        runGit(this.workDir(), [
-          "clean", "-fd", "-e", ".auto", "-e", "**/.auto/**", "-e", "autoresearch.*", "-e", "**/autoresearch.*/**",
-        ]);
+    let rollbackNeedsDecision = false;
+    if (status !== "keep") {
+      const restored = this.restoreSnapshots();
+      if (protectionMode === "git" && pathspecs.length) {
+        runGit(this.workDir(), ["reset", "-q", "HEAD", "--", ...pathspecs], { allowFailure: true });
       }
-      gitText = `Git: reverted ${status} changes; autoresearch artifacts were preserved.`;
+      rollbackNeedsDecision = !restored.ok;
+      gitText = restored.ok
+        ? "已自动撤销本轮变化，实验记录已保留。"
+        : `已撤销普通文件；另有 ${restored.warnings.length} 个特殊路径需要你确认。`;
+      if (rollbackNeedsDecision) {
+        this.savePrivate({ active: false, pendingResumeToken: null, protectionMode: "snapshot" });
+      }
     }
 
     const after = await this.fireHook("after", { run_entry: provisional });
@@ -966,7 +1276,10 @@ export class AutoresearchController {
         : DEFAULT_MAX_AUTORESUME_TURNS;
     let resume = { shouldSchedule: false, command: null, token: null };
     let stopText = "";
-    if (maxIterations !== null && segmentCount >= maxIterations) {
+    if (rollbackNeedsDecision) {
+      this.savePrivate({ active: false, pendingResumeToken: null, lastRunChecks: null, lastRunDuration: null });
+      stopText = "检测到特殊路径，循环已安全暂停；请确认后再继续。";
+    } else if (maxIterations !== null && segmentCount >= maxIterations) {
       this.savePrivate({ active: false, pendingResumeToken: null, lastRunChecks: null, lastRunDuration: null });
       stopText = `Maximum experiments reached (${maxIterations}). The loop is stopped.`;
     } else if (maxAutoResumeTurns !== null && privateState.autoResumeTurns >= maxAutoResumeTurns) {
@@ -1070,6 +1383,8 @@ export class AutoresearchController {
       gitOk: safety.ok === true,
       gitError: safety.error ?? null,
       allowNoGit: safety.allowNoGit === true,
+      protectionMode: safety.protectionMode ?? privateState.protectionMode ?? "pending",
+      protectedPathCount: this.protectedPaths().length,
       name: persisted.name,
       metricName: persisted.metricName,
       metricUnit: persisted.metricUnit,

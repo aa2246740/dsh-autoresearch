@@ -27,10 +27,11 @@ Session files live in .auto/: prompt.md, measure.sh (emits METRIC name=number), 
 Loop rules:
 1. Change one coherent variable per run.
 2. Primary metric decides keep vs discard. Secondary metrics are guardrails.
-3. Never invent a result. Never manually commit or revert — log_experiment owns git.
-4. After every run, always call autoresearch_log_experiment.
-5. Continue until a tool reports a limit, the user runs /autoresearch off, the work is blocked, or the user interrupts.
-6. When the host follows up after a logged run, call autoresearch_status, then run the next experiment.
+3. Never invent a result. Never manually commit or revert — log_experiment owns local protection.
+4. Modify source through file edit/write tools, not shell redirection, sed -i, rm, or generated overwrite commands. The pre-execute hook snapshots each file before its first mutation. Bash is for inspection, builds, tests, and benchmarks.
+5. After every run, always call autoresearch_log_experiment.
+6. Continue until a tool reports a limit, the user runs /autoresearch off, the work is blocked, or the user interrupts.
+7. When the host follows up after a logged run, call autoresearch_status, then run the next experiment.
 
 If setup is incomplete, inspect the project, write .auto/prompt.md and a deterministic .auto/measure.sh, then init_experiment and log a baseline.`
 

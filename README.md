@@ -51,7 +51,7 @@ dshx start web dsh-autoresearch
 
 1. 打开官方 Web，进入一个项目会话；用户不需要预先配置 Git。
 2. 在输入框输入 `/autoresearch`，选 **新开一次 Autoresearch**。输入框正上方出现引导卡（不是全屏 overlay，不挡上面的 Agent 输出）。
-3. 卡上只填两件事：目标（自然语言，和 grok-autoresearch 的 `/autoresearch <goal>` 一样）和轮次。不要填主指标、方向、measure.sh。点 **确认并开始** 后，插件会在需要时自动开启本地 Git 保护、补齐仅限该项目的身份并保存当前状态为基线；不会上传代码。
+3. 卡上只填两件事：目标（自然语言，和 grok-autoresearch 的 `/autoresearch <goal>` 一样）和轮次。不要填主指标、方向、measure.sh。点 **确认并开始** 后，插件会自动保存本地保护点；有 Git 就安全复用，没有 Git、Git 忙碌或项目已有未提交内容时就无感切换到插件自己的文件快照。不会上传代码，也不会要求用户配置 Git。
 4. 确认后 dock 收起（最多留一句「等 agent 在对话里对齐需求」）。此时没有进度卡；agent 可以先在对话里对齐需求。
 5. 第一次 `run_experiment` 才出现一行 `running…`。第一次 `log_experiment` 入账后出现一张人话进度卡（Runs / kept / discarded / Baseline / Progress Δ% / 短表）。没有第二层「更大视图」。
 
@@ -71,7 +71,7 @@ dshx start web dsh-autoresearch
 | `.auto/config.json` | `maxIterations`、`maxAutoResumeTurns`、`workingDir`；普通用户无需配置 Git |
 | `.auto/hooks/{before,after}.sh` | 可选生命周期钩子（stdin 为 JSON） |
 
-循环会在本地提交有效实验，并回滚无效实验。首次确认时会先保护当前状态；远端上传仍然必须由用户另行明确执行。
+循环会保存有效实验，并回滚无效实验。干净的 Git 项目可以保留本地实验提交；其他项目使用插件私有快照，不会污染用户已有历史或暂存区。首次确认时会先保护当前状态，之后每个新编辑文件也会在修改前自动加入保护；远端上传仍然必须由用户另行明确执行。
 
 ## 模型面工具
 

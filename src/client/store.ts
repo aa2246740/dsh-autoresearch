@@ -124,6 +124,13 @@ export function parseRoundBudget(raw: string): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
 }
 
+/** Never expose internal process/Git failures in the beginner start card. */
+export function friendlyStartError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? '')
+  if (/没有活动会话|请填写目标|轮次必须/.test(raw)) return raw
+  return '自动准备没有完成，但项目和会话都没有损坏。请再点一次“确认并开始”；如果仍未完成，请重新打开目标项目会话。'
+}
+
 /**
  * Command sent only after 「确认并开始」.
  * Goal is natural language; rounds become maxIterations via `for N runs`.

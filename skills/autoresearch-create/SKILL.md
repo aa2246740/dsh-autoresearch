@@ -14,7 +14,7 @@ Before doing anything, call `autoresearch_status`. If it is inactive, stop and t
 
 - **`autoresearch_init_experiment`** — configure session (name, metric, unit, direction). Call again to re-initialize with a new baseline when the optimization target changes.
 - **`autoresearch_run_experiment`** — runs a command, times it, captures output, and parses metrics.
-- **`autoresearch_log_experiment`** — records a result. `keep` auto-commits. `discard`/`crash`/`checks_failed` auto-reverts code changes while preserving autoresearch files. Always include secondary `metrics`.
+- **`autoresearch_log_experiment`** — records a result. `keep` advances the local protection point (and commits when the current repository is clean and safe to use). `discard`/`crash`/`checks_failed` restore protected code while preserving autoresearch files. Always include secondary `metrics`.
 - **`the optional hint tool (disabled by default)`** — optional advisory side-model hint, available only when the user explicitly enables it in config.
 
 ## Session files
@@ -36,10 +36,10 @@ All session files live in a single `.auto/` subfolder at the working directory r
 ## Setup
 
 1. Ask (or infer): **Goal**, **Command**, **Metric** (+ direction), **Files in scope**, **Constraints**.
-2. Treat local version protection as already handled by `/autoresearch`: on confirmation the controller initializes Git when needed, fills a repository-local identity when missing, and saves the current project state as a baseline. Never stop to ask a beginner to run Git commands. If status still reports a setup failure, explain the concrete filesystem/Git error and let the user retry.
-3. `git checkout -b autoresearch/<goal>-<date>`
-4. Read the source files. Understand the workload deeply before writing anything.
-5. `mkdir -p .auto`, then write `.auto/prompt.md` and `.auto/measure.sh` (see below). Commit both.
+2. Treat local protection as already handled by `/autoresearch`: the controller uses the current repository when that is safe, creates local protection when needed, and silently falls back to private file snapshots if Git is missing, busy, dirty, or unavailable. Never ask a beginner to run Git commands and never expose an internal Git error. Only ask the user to choose a concrete project folder when the folder itself is missing or a special path cannot be protected automatically.
+3. Read the source files. Understand the workload deeply before writing anything.
+4. Create `.auto/prompt.md` and `.auto/measure.sh` with file write/edit tools (see below). Do not create a branch or commit manually.
+5. Modify source through file write/edit tools so the pre-execute hook can save each file before its first mutation. Do not modify source with shell redirection, `sed -i`, `rm`, or generated overwrite commands; use Bash only for read-only inspection, builds, tests, and benchmarks.
 6. `autoresearch_init_experiment` -> run baseline -> `autoresearch_log_experiment` -> start looping immediately.
 
 ### `.auto/prompt.md`
@@ -109,7 +109,7 @@ JSON config file that lives in `.auto/` under the Grok workspace root. Supported
 - **`maxIterations`** (number) — maximum experiments before auto-stopping.
 - **`maxAutoResumeTurns`** (number or null) — maximum automatic resume prompts before the safety valve stops the loop. Defaults to 20. Set to `null` or `0` for intentional unlimited auto-resume.
 - **`workingDir`** (string) — override the directory for all autoresearch operations: file I/O (`.auto/log.jsonl`, `.auto/prompt.md`, `.auto/measure.sh`, `.auto/checks.sh`, `.auto/ideas.md`), command execution, and git operations. Supports absolute paths or relative paths (resolved against `ctx.cwd`). The config file itself always stays under `ctx.cwd`. Fails if the directory doesn't exist.
-- **`allowNoGit`** (boolean) — advanced escape hatch for disposable sessions only. Normal users never need this: confirmation automatically enables local Git protection and creates a baseline without uploading code.
+- **`allowNoGit`** (boolean) — advanced compatibility switch. It skips Git integration but keeps private local snapshot protection. Normal users never need to set it.
 - **`hints`** (object) — optional side-model hint config. Do not create this by default. Only add it when the user explicitly wants `the optional hint tool (disabled by default)` to call a configured model for advisory strategy help.
 
 ```json
@@ -173,7 +173,7 @@ pnpm typecheck 2>&1 | grep -i error || true
 - **Don't thrash.** Repeatedly reverting the same idea? Try something structurally different.
 - **Crashes:** fix if trivial, otherwise log and move on. Don't over-invest.
 - **Think longer when stuck.** Re-read source files, study the profiling data, reason about what the CPU is actually doing. The best ideas come from deep understanding, not from trying random variations.
-- **Resuming:** if `.auto/prompt.md` exists, read it + git log, continue looping.
+- **Resuming:** if `.auto/prompt.md` exists, read it and `.auto/log.jsonl`, then continue looping. Git knowledge is never required.
 
 **NEVER STOP.** The user may be away for hours. Keep going until interrupted.
 

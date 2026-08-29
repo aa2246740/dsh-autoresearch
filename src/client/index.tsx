@@ -18,6 +18,7 @@ import {
   applyCommandText,
   buildStartLine,
   cancelInitDock,
+  friendlyStartError,
   hideAfterConfirm,
   parseRoundBudget,
   patchLab,
@@ -201,7 +202,7 @@ function InitDockCard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | nul
       await executeLine(ctx, sessionId, buildStartLine(draft))
       hideAfterConfirm()
     } catch (error) {
-      patchLab({ busy: false, error: error instanceof Error ? error.message : String(error) })
+      patchLab({ busy: false, error: friendlyStartError(error) })
     }
   }
 
@@ -249,7 +250,7 @@ function InitDockCard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | nul
           {lab.busy ? '正在启动…' : '确认并开始'}
         </LabButton>
       </div>
-      {lab.error ? <div style={{ color: colors.bad, fontSize: 12, whiteSpace: 'pre-wrap' }}>{lab.error}</div> : null}
+      {lab.error ? <div style={{ color: colors.warn, fontSize: 12, whiteSpace: 'pre-wrap' }}>{lab.error}</div> : null}
     </form>
   )
 }

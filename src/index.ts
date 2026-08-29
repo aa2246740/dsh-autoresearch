@@ -47,6 +47,43 @@ function record(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+function portableWorkspacePath(cwd: string, changedPath: unknown): string | null {
+  if (typeof changedPath !== 'string' || !changedPath.trim()) return null
+  const absolute = path.resolve(cwd, changedPath)
+  const relative = path.relative(cwd, absolute)
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null
+  const portable = relative.split(path.sep).join('/')
+  if (portable === '.git' || portable.startsWith('.git/')) return null
+  if (portable === '.auto' || portable.startsWith('.auto/')) return null
+  return portable
+}
+
+/** Extract file targets before a mutating tool runs, so protection is lazy and exact. */
+export function mutationPathsFromToolCall(name: string, rawArgs: unknown, cwd: string): string[] {
+  const toolName = String(name || '').toLowerCase()
+  if (!/(?:^|_)(?:write|edit|search_replace|replace|apply_patch|delete|remove|move|rename)(?:_|$)/.test(toolName)) return []
+  let args = record(rawArgs)
+  if (!args && typeof rawArgs === 'string') {
+    try { args = record(JSON.parse(rawArgs)) } catch { /* raw patch payload handled below */ }
+  }
+  const selected = new Set<string>()
+  const add = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) add(item)
+      return
+    }
+    const portable = portableWorkspacePath(cwd, value)
+    if (portable) selected.add(portable)
+  }
+  for (const key of ['file_path', 'filePath', 'path', 'paths', 'old_path', 'new_path', 'source_path', 'destination_path']) {
+    add(args?.[key])
+  }
+  const patchText = String(args?.patch ?? args?.input ?? (typeof rawArgs === 'string' ? rawArgs : ''))
+  for (const match of patchText.matchAll(/^\*\*\* (?:Update|Add|Delete) File:\s*(.+)$/gm)) add(match[1].trim())
+  for (const match of patchText.matchAll(/^\*\*\* Move to:\s*(.+)$/gm)) add(match[1].trim())
+  return [...selected]
+}
+
 /**
  * Find files this conversation already changed so an umbrella workspace can
  * receive narrow local version protection without staging sibling projects.
@@ -65,12 +102,9 @@ export function protectedPathsFromSession(session: SessionLike | undefined, cwd:
     const event = record(rawEvent)
     if (event?.type === 'tool/call') {
       const data = record(event.data)
-      if (data?.name !== 'write' && data?.name !== 'edit') continue
-      let args = record(data.arguments)
-      if (!args && typeof data.arguments === 'string') {
-        try { args = record(JSON.parse(data.arguments)) } catch { /* incomplete or non-JSON arguments */ }
+      for (const changedPath of mutationPathsFromToolCall(String(data?.name ?? ''), data?.arguments, cwd)) {
+        if (addPath(changedPath)) return [...selected]
       }
-      if (addPath(args?.file_path)) return [...selected]
       continue
     }
     if (event?.type !== 'tool/result') continue
@@ -165,13 +199,24 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.on('tools/pre-execute', (exec: { name: string; arguments?: unknown; agent?: { session?: { header?: { cwd?: string } } } }, next: () => Promise<unknown>) => {
     const cwd = workspaceOf(exec.agent)
-    const pending = controllerFor(cwd).privateState()
+    const controller = controllerFor(cwd)
+    const pending = controller.privateState()
     const args = exec.arguments && typeof exec.arguments === 'object' && !Array.isArray(exec.arguments)
       ? exec.arguments as Record<string, unknown>
       : undefined
     const decision = evaluatePendingGuard({ toolName: exec.name, args, cwd, pending })
     if (decision.decision === 'deny') {
       return { kind: 'deny', reason: decision.reason }
+    }
+    const mutationPaths = mutationPathsFromToolCall(exec.name, exec.arguments, cwd)
+    if (mutationPaths.length) {
+      const protectedResult = controller.protectPathsBeforeMutation(mutationPaths)
+      if (!protectedResult.ok) {
+        return {
+          kind: 'deny',
+          reason: protectedResult.text ?? '这个特殊路径需要你确认后才能修改。',
+        }
+      }
     }
     return next()
   })
