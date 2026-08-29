@@ -334,7 +334,7 @@ export function inspectConversation(conv: ConversationInspectInput | null | unde
   })
 
   const kind = progressCardKind({
-    results: logSnapshot?.results,
+    results: (logSnapshot as AutoresearchSnapshot | null)?.results,
     runningExperiment,
     hasRunStarted,
   })
