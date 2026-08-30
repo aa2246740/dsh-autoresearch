@@ -843,7 +843,10 @@ test('progress UI is outcome-first, state-aware, and no longer a terminal table'
   assert.match(source, /ariaLabel="关闭本轮结果"/)
   assert.match(source, /正在优化/)
   assert.doesNotMatch(source, /<table/)
-  assert.doesNotMatch(source, /版本 \{row\.commit\}/)
+  assert.match(source, /data-autoresearch="history-list-toggle"/)
+  assert.match(source, /data-autoresearch-expand-run=/)
+  assert.match(source, /data-autoresearch-run-detail=/)
+  assert.match(source, /版本 \{row\.commit\}/)
   assert.match(source, /最近记录/)
   assert.match(source, /width: min\(420px/)
   assert.match(source, /-webkit-line-clamp: 1/)
@@ -855,7 +858,7 @@ test('progress UI is outcome-first, state-aware, and no longer a terminal table'
 
 test('dashboard keeps the monitor concise without deleting the full ledger', () => {
   const source = fs.readFileSync(new URL('../src/client/dashboard.ts', import.meta.url), 'utf8')
-  assert.match(source, /const TABLE_ROWS = 3/)
+  assert.match(source, /const RECENT_ROWS = 3/)
 
   const snapshot = emptySnapshot({
     results: Array.from({ length: 7 }, (_, index) => sampleRun({
@@ -871,6 +874,7 @@ test('dashboard keeps the monitor concise without deleting the full ledger', () 
   })
   const model = buildDashboardModel(snapshot)
   assert.deepEqual(model.rows.map((row) => row.run), [5, 6, 7])
+  assert.deepEqual(model.allRows.map((row) => row.run), [1, 2, 3, 4, 5, 6, 7])
   assert.equal(snapshot.results.length, 7)
 })
 

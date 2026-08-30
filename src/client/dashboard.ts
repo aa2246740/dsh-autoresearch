@@ -31,6 +31,7 @@ export interface DashboardModel {
   baseline: { value: string; run: number } | null
   progress: { value: string; run: number; deltaPct: number | null; improved: boolean | null } | null
   secondaries: DashboardSecondary[]
+  allRows: DashboardRow[]
   rows: DashboardRow[]
   running: boolean
   runningCommand: string | null
@@ -52,7 +53,7 @@ export interface ConversationProgress {
 
 const RUN_TOOL = 'autoresearch_run_experiment'
 const LOG_TOOL = 'autoresearch_log_experiment'
-const TABLE_ROWS = 3
+const RECENT_ROWS = 3
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -182,14 +183,14 @@ export function buildDashboardModel(
     }
   }
 
-  const start = Math.max(0, current.length - TABLE_ROWS)
-  const rows = current.slice(start).map((run) => ({
+  const allRows = current.map((run) => ({
     run: run.run,
     commit: shortCommit(run.status, run.commit),
     metric: formatNum(run.metric, unit),
     status: run.status,
     description: String(run.description || run.asi?.hypothesis || '').trim() || '—',
   }))
+  const rows = allRows.slice(Math.max(0, allRows.length - RECENT_ROWS))
 
   return {
     title: snapshot.name ? `autoresearch: ${snapshot.name}` : 'autoresearch',
@@ -215,6 +216,7 @@ export function buildDashboardModel(
         }
       : null,
     secondaries,
+    allRows,
     rows,
     running: opts.running === true,
     runningCommand: opts.runningCommand ?? null,

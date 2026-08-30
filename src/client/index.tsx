@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent } from 'react'
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import { useAnchoredPosition } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -213,21 +213,68 @@ const clientStyles = `
   .dsh-ar-button:active:not(:disabled) { filter: brightness(0.93); }
   .dsh-ar-button:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: 2px; }
   .dsh-ar-history-row {
+    border-top: 1px solid ${colors.line};
+  }
+  .dsh-ar-history-row:first-child { border-top: 0; }
+  .dsh-ar-history-summary {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 44px;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: start;
     column-gap: 16px;
     row-gap: 5px;
     padding: 11px 0 12px;
-    border-top: 1px solid ${colors.line};
+    border: 0;
+    background: transparent;
+    color: ${colors.text};
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
   }
-  .dsh-ar-history-row:first-child { border-top: 0; }
-  .dsh-ar-history-description {
-    grid-column: 1 / -1;
+  .dsh-ar-history-summary:hover .dsh-ar-history-disclosure { color: ${colors.text}; }
+  .dsh-ar-history-summary:focus-visible,
+  .dsh-ar-history-list-toggle:focus-visible {
+    outline: 2px solid ${colors.accent};
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  .dsh-ar-history-preview {
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 1;
     overflow: hidden;
+    color: ${colors.muted};
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+  .dsh-ar-history-disclosure {
+    align-self: end;
+    color: ${colors.muted};
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+  .dsh-ar-history-detail {
+    padding: 0 0 14px;
+    color: ${colors.text};
+    font-size: 13px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+  .dsh-ar-history-list-toggle {
+    min-width: 44px;
+    min-height: 32px;
+    margin: -6px -4px -6px 0;
+    padding: 0 4px;
+    border: 0;
+    background: transparent;
+    color: ${colors.muted};
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
   }
   @media (max-width: 640px) {
     .dsh-ar-panel-scroll { padding: 18px 18px 12px; }
@@ -479,6 +526,17 @@ function ProgressCard({
             ? '正在执行'
             : '循环已开启'
   const issueCount = model.crashed + model.checksFailed
+  const [showAllRuns, setShowAllRuns] = useState(false)
+  const [expandedRun, setExpandedRun] = useState<number | null>(null)
+  const historyId = useId()
+  const historySectionRef = useRef<HTMLElement>(null)
+  const snapshotIdentity = progressIdentity(snapshot)
+  const visibleRows = showAllRuns ? model.allRows : model.rows
+
+  useEffect(() => {
+    setShowAllRuns(false)
+    setExpandedRun(null)
+  }, [snapshotIdentity])
 
   async function onPause(): Promise<void> {
     if (!sessionId || lab.busy) return
@@ -574,30 +632,60 @@ function ProgressCard({
         </div>
       </section>
 
-      <section data-ud-check="experiment-history" data-ud-role="panel" style={{ paddingTop: 18 }}>
+      <section ref={historySectionRef} data-ud-check="experiment-history" data-ud-role="panel" style={{ paddingTop: 18 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 2 }}>
           <div style={{ fontSize: 13, fontWeight: 620 }}>最近记录</div>
-          <div style={{ color: colors.muted, fontSize: 11, ...tabular }}>{model.rows.length} / {model.runs}</div>
+          <button
+            type="button"
+            className="dsh-ar-history-list-toggle"
+            data-autoresearch="history-list-toggle"
+            aria-expanded={showAllRuns}
+            onClick={() => {
+              setShowAllRuns((value) => !value)
+              setExpandedRun(null)
+              requestAnimationFrame(() => historySectionRef.current?.scrollIntoView({ block: 'start' }))
+            }}
+          >
+            {showAllRuns ? '只看最近 3 轮' : `查看全部 ${model.allRows.length} 轮`}
+          </button>
         </div>
         <ol aria-label="最近记录" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-          {model.rows.map((row) => (
+          {visibleRows.map((row) => {
+            const expanded = expandedRun === row.run
+            const detailId = `${historyId}-run-${row.run}`
+            return (
             <li
               className="dsh-ar-history-row"
               key={row.run}
               data-autoresearch-run={row.run}
               data-autoresearch-status={row.status}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, fontSize: 12 }}>
-                <span aria-label={`第 ${row.run} 轮`} style={{ color: colors.muted, ...tabular }}>#{row.run}</span>
-                <span aria-hidden="true" style={{ width: 5, height: 5, borderRadius: '50%', background: statusColor(row.status) }} />
-                <span style={{ color: statusColor(row.status), fontWeight: 560 }}>{statusLabel(row.status)}</span>
-              </div>
-              <div style={{ fontSize: 13, fontWeight: 620, textAlign: 'right', ...tabular }}>{row.metric}</div>
-              <div className="dsh-ar-history-description" style={{ minWidth: 0, color: colors.muted, fontSize: 13, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
-                {row.description}
-              </div>
+              <button
+                type="button"
+                className="dsh-ar-history-summary"
+                data-autoresearch-expand-run={row.run}
+                aria-expanded={expanded}
+                aria-controls={detailId}
+                onClick={() => setExpandedRun((value) => value === row.run ? null : row.run)}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, fontSize: 12 }}>
+                  <span aria-label={`第 ${row.run} 轮`} style={{ color: colors.muted, ...tabular }}>#{row.run}</span>
+                  <span aria-hidden="true" style={{ width: 5, height: 5, borderRadius: '50%', background: statusColor(row.status) }} />
+                  <span style={{ color: statusColor(row.status), fontWeight: 560 }}>{statusLabel(row.status)}</span>
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 620, textAlign: 'right', ...tabular }}>{row.metric}</span>
+                {!expanded ? <span className="dsh-ar-history-preview">{row.description}</span> : <span />}
+                <span className="dsh-ar-history-disclosure">{expanded ? '收起' : '展开'}</span>
+              </button>
+              {expanded ? (
+                <div id={detailId} className="dsh-ar-history-detail" data-autoresearch-run-detail={row.run}>
+                  <div>{row.description}</div>
+                  {row.commit !== '—' ? <div style={{ ...mono, color: colors.muted, fontSize: 11, marginTop: 7 }}>版本 {row.commit}</div> : null}
+                </div>
+              ) : null}
             </li>
-          ))}
+            )
+          })}
         </ol>
       </section>
 
