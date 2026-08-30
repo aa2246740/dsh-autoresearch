@@ -7,6 +7,9 @@ const KNOWN_BROKEN_PLAYBOOK_HASHES = new Set([
   // 2026-08-29 create / continue playbooks emitted before message identity was fixed.
   'bf9bb01c81cc273db5ee958da0356cd877f49f2be4fb5e21d11e6967622a1efb',
   '1d2af121cbeb37169528c613ec8daf6bbd17fbd7da7dff7b3968aa6e1c4e8b9f',
+  // 2026-08-30 structured completion create / continue playbooks.
+  'cef02d5783378508b53039473e2bd4bf0d25d9a693646c4095922dcefbde7094',
+  '76c36f83add5b918bdf625d9091d19b1b9153e3e02d934e0ed0be48b00f97fe8',
 ])
 
 type JsonRecord = Record<string, unknown>
@@ -22,6 +25,12 @@ export interface SessionRepairResult {
   jsonl: string
   repairs: SessionMessageRepair[]
   sessionId: string
+}
+
+export interface IgnorableStateMigrationResult {
+  jsonl: string
+  sessionId: string
+  markedEventSeqs: number[]
 }
 
 function record(value: unknown): JsonRecord | null {
@@ -55,6 +64,51 @@ function assertKnownBrokenAutoresearchMessage(message: JsonRecord, seq: number):
 
 function recoveredId(sessionId: string, seq: number, index: number, text: string): string {
   return `autoresearch-recovery-${digest(`${sessionId}\0${seq}\0${index}\0${text}`).slice(0, 32)}`
+}
+
+/**
+ * Mark only the exact legacy state snapshot event written by this plugin as
+ * ignorable. DSH deliberately treats every out-of-repo event type as unknown;
+ * this envelope flag makes old sessions portable without discarding the event
+ * when Autoresearch is installed. No seq, time, data, or unrelated line moves.
+ */
+export function markAutoresearchStateEventsIgnorable(input: string): IgnorableStateMigrationResult {
+  const trailingNewline = input.endsWith('\n')
+  const lines = input.split('\n')
+  if (trailingNewline) lines.pop()
+  if (lines.length === 0) throw new Error('session JSONL is empty')
+  const parsed = lines.map((line, index) => {
+    try { return JSON.parse(line) as unknown }
+    catch { throw new Error(`session JSONL line ${index + 1} is not valid JSON`) }
+  })
+  const header = record(parsed[0])
+  const sessionId = typeof header?.id === 'string' && header.id ? header.id : null
+  if (!sessionId) throw new Error('session JSONL header has no id')
+
+  const markedEventSeqs: number[] = []
+  for (const value of parsed.slice(1)) {
+    const event = record(value)
+    if (event?.type !== 'autoresearch/state') continue
+    const seq = Number(event.seq)
+    const data = record(event.data)
+    const snapshot = record(data?.snapshot)
+    if (!Number.isSafeInteger(seq) || seq < 0 || !snapshot
+      || typeof snapshot.cwd !== 'string' || !Array.isArray(snapshot.results)) {
+      throw new Error('refusing an autoresearch/state event that does not match the published snapshot envelope')
+    }
+    if (event.ignorable === true) continue
+    if (event.ignorable !== undefined) {
+      throw new Error(`refusing autoresearch/state seq ${seq} with an invalid ignorable marker`)
+    }
+    event.ignorable = true
+    markedEventSeqs.push(seq)
+  }
+
+  const changed = new Set(markedEventSeqs)
+  const jsonl = parsed.map((value, index) => changed.has(Number(record(value)?.seq))
+    ? JSON.stringify(value)
+    : lines[index]).join('\n') + (trailingNewline ? '\n' : '')
+  return { jsonl, sessionId, markedEventSeqs }
 }
 
 /**

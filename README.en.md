@@ -10,6 +10,10 @@ This is not ordinary chat. A random prompt must not start the loop. The home pag
 
 Type `/autoresearch` (or pick **Start a new Autoresearch** in the slash menu) to open a reserved init dock **above the composer**. Confirm is required before `active` becomes true. The init card has two fields: a natural-language goal (same as grok-autoresearch `/autoresearch <goal>`) and a round budget. Users never need to configure Git: the plugin reuses a clean repository when safe, creates local protection when needed, and silently falls back to private file snapshots when Git is missing, busy, or the project already has local work. Nothing is uploaded and an existing index/history is not polluted. New edit targets are added to protection before their first mutation. After confirm, the composer dock disappears completely. Waiting, running, and result monitoring move into a collapsed flask control in the session header, so the transcript keeps its reading height. The first `run_experiment` exposes the running state; the first `log_experiment` enables an anchored, bordered result board with the outcome and recent experiments. Click the trigger again, click outside, or press Escape to hide it.
 
+Every logged experiment atomically records whether the loop continues, completes, or waits for a user decision. Verified completion clears automatic continuation and changes the header state to **Goal completed** without asking a beginner to type `/autoresearch off`. Product or quality tradeoffs pause the loop with a concrete decision question instead of pretending that work is still running.
+
+Since 1.0.4, the plugin writes no out-of-repo custom event into DSH session logs. It folds only the official `command/run`, `command/done`, and `tool/result` vocabulary. On upgrade it checks workspaces that previously used Autoresearch; a legacy `autoresearch/state` record is backed up byte-for-byte, changed only by adding `ignorable: true`, atomically published, and then fully reloaded through the active official DSH persistence implementation. Any validation failure restores the original log.
+
 Same-session auto-resume uses Host `agent.followup` until `maxIterations`, `/autoresearch off`, a stuck state, or an interrupt.
 
 ## Install
@@ -38,7 +42,7 @@ Do not commit machine-absolute paths in `cordis.yml`.
 
 Plugin versions before 2026-08-30 constructed automatic follow-up prompts as plain objects and omitted DSH's required `message.id`. Current code creates every follow-up with the official `createUserMessage()` helper, and its regression test JSON-round-trips each message through the official session loader.
 
-For an already affected session, stop the Host that can write it and create a separate candidate:
+Version 1.0.4 automatically migrates legacy `autoresearch/state` envelopes at Host startup. The command below is only for a maintainer repairing the earlier message-identity defect offline. Stop the Host that can write the session, then create a separate candidate:
 
 ```sh
 pnpm build

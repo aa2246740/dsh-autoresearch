@@ -1,6 +1,6 @@
 {
   "name": "dsh-autoresearch",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "Durable auto-research experiment loop for DeepSeek Harness, with create / run / monitor in the official Web GUI.",
   "type": "module",
   "main": "lib/index.js",

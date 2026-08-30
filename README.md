@@ -55,6 +55,8 @@ dshx start web dsh-autoresearch
 4. 确认后 composer dock 完全收起；等待、运行和结果监测都进入会话顶部栏，不再占用对话阅读高度。agent 仍可先在对话里对齐需求。
 5. 顶部栏的烧瓶入口默认收起：第一次 `run_experiment` 显示运行状态，第一次 `log_experiment` 入账后可展开人话结果 Board（Runs / kept / discarded / Baseline / Progress Δ% / 最近实验）。再次点击、点击面板外或按 Esc 都能收起；面板使用独立底色和边框，不与页面背景混在一起。
 
+每次实验入账都会原子写入下一步：继续、目标完成，或等待用户拍板。目标完成会自动清除续跑并把顶部状态切到「目标已完成」，不再要求小白用户手动输入 `/autoresearch off`；如果进一步优化涉及画质、范围或其他取舍，循环会暂停并展示明确问题，等用户确认后再继续。
+
 暂停续跑：展开顶部 Board 后点「暂停」，或输入 `/autoresearch off`。清除账本用 `/autoresearch clear`。
 
 斜杠 `/autoresearch` 会弹出：新开一次 / 继续 / 状态 / 停止 / 清除。顶部 Board 从对话里的 run/log 工具更新，不会把账本 JSON 写进聊天。
@@ -73,9 +75,13 @@ dshx start web dsh-autoresearch
 
 循环会保存有效实验，并回滚无效实验。干净的 Git 项目可以保留本地实验提交；其他项目使用插件私有快照，不会污染用户已有历史或暂存区。首次确认时会先保护当前状态，之后每个新编辑文件也会在修改前自动加入保护；远端上传仍然必须由用户另行明确执行。
 
+完成与暂停是持久状态，不靠模型文案猜测：每次实验必须结构化选择 `continue`、`complete` 或 `needs_user`。达成目标后会自动取消续跑并显示「目标已完成」；需要取舍时会停止自动工作并把明确问题交给 DSH 的确认界面。
+
+从 1.0.4 起，插件不再向 DSH 会话日志写外部自定义事件，只折叠官方 `command/run`、`command/done` 和 `tool/result`。升级时会一次性检查曾使用过 Autoresearch 的工作区；如发现旧版 `autoresearch/state`，先留下字节级 `.bak`，再只补 `ignorable: true`，原子替换后交给当前 DSH 的官方会话加载器完整复验。迁移失败会回滚原文件，不能让一条监测事件锁死整段对话。
+
 ## 模型面工具
 
-`autoresearch_control` / `_status` / `_init_experiment` / `_run_experiment` / `_log_experiment` / `_compaction_summary`
+`autoresearch_control` / `_status` / `_init_experiment` / `_run_experiment` / `_log_experiment` / `_finish` / `_compaction_summary`
 
 普通 prompt 禁止调用 `autoresearch_control` 来激活循环。
 
@@ -83,7 +89,7 @@ dshx start web dsh-autoresearch
 
 2026-08-30 之前的插件曾把自动续跑 prompt 直接拼成普通对象，缺少 DSH 要求的 `message.id`。新版统一通过官方 `createUserMessage()` 创建消息；回归测试还会把消息 JSON 往返后交给官方 session loader，防止同类问题再次进入发行版。
 
-如果旧会话已经受影响，先停止写入该会话的 Host，再生成候选文件：
+1.0.4 会在 Host 启动时自动完成旧 `autoresearch/state` 兼容迁移；下面的命令只用于维护者离线修复更早的消息 ID 缺陷。先停止写入该会话的 Host，再生成候选文件：
 
 ```sh
 pnpm build

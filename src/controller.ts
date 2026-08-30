@@ -357,7 +357,7 @@ function confidenceFor(results, segment, direction) {
 
 function defaultPrivateState(cwd, workDir) {
   return {
-    version: 2,
+    version: 3,
     cwd,
     workDir,
     sessionEpoch: 0,
@@ -365,6 +365,10 @@ function defaultPrivateState(cwd, workDir) {
     pendingNewGoal: false,
     active: false,
     manualOff: false,
+    loopState: "idle",
+    completionReason: null,
+    completedAt: null,
+    decisionQuestion: null,
     autoResumeTurns: 0,
     pendingResumeToken: null,
     hintsThisSession: 0,
@@ -560,11 +564,16 @@ export class AutoresearchController {
 
   privateState() {
     const defaults = defaultPrivateState(this.cwd, this.workDir());
-    return { ...defaults, ...readJson(this.statePath(), {}) };
+    const stored = readJson(this.statePath(), {});
+    const merged = { ...defaults, ...stored };
+    if (!stored.loopState) {
+      merged.loopState = merged.active ? "active" : merged.manualOff ? "stopped" : "idle";
+    }
+    return merged;
   }
 
   savePrivate(patch) {
-    const next = { ...this.privateState(), ...patch, cwd: this.cwd, workDir: this.workDir(), updatedAt: Date.now() };
+    const next = { ...this.privateState(), ...patch, version: 3, cwd: this.cwd, workDir: this.workDir(), updatedAt: Date.now() };
     writeJsonAtomic(this.statePath(), next);
     this.notifyChange();
     return next;
@@ -916,6 +925,51 @@ export class AutoresearchController {
     return { result, steer: steerMessageFor(event, result) };
   }
 
+  async finish({ outcome = "complete", reason = "", user_question = "" } = {}) {
+    const privateState = this.privateState();
+    if (!privateState.active && privateState.loopState !== "awaiting_user") {
+      return { ok: false, active: false, text: "Autoresearch is not active." };
+    }
+    if (!["complete", "needs_user"].includes(outcome)) {
+      return { ok: false, active: privateState.active, text: "outcome must be complete or needs_user." };
+    }
+    const decisionReason = String(reason).trim();
+    if (!decisionReason) return { ok: false, active: privateState.active, text: "reason is required." };
+    const persisted = this.persisted();
+    const current = persisted.results.filter((run) => run.segment === persisted.currentSegment);
+    if (outcome === "complete" && !current.some((run) => run.status === "keep")) {
+      return { ok: false, active: privateState.active, text: "Cannot complete without a kept result in the current goal." };
+    }
+    const question = String(user_question).trim();
+    if (outcome === "needs_user" && !question) {
+      return { ok: false, active: privateState.active, text: "user_question is required when outcome is needs_user." };
+    }
+    const completed = outcome === "complete";
+    this.savePrivate({
+      active: false,
+      manualOff: false,
+      loopState: completed ? "completed" : "awaiting_user",
+      completionReason: decisionReason,
+      completedAt: completed ? Date.now() : null,
+      decisionQuestion: completed ? null : question,
+      pendingResumeToken: null,
+      lastRunChecks: null,
+      lastRunDuration: null,
+    });
+    return {
+      ok: true,
+      active: false,
+      needsDecision: !completed,
+      loopState: completed ? "completed" : "awaiting_user",
+      completionReason: decisionReason,
+      completedAt: completed ? this.privateState().completedAt : null,
+      decisionQuestion: completed ? null : question,
+      text: completed
+        ? `Autoresearch completed: ${decisionReason}`
+        : `Autoresearch is waiting for the user: ${question}\nReason: ${decisionReason}`,
+    };
+  }
+
   async control({ args = "", protectedPaths = [] }: { args?: string; protectedPaths?: string[] } = {}) {
     let text = String(args).trim();
     const command = text.toLowerCase();
@@ -937,15 +991,45 @@ export class AutoresearchController {
       };
     }
     if (command === "status") return this.status();
+    if (command === "complete" || command.startsWith("complete ")) {
+      return this.finish({
+        outcome: "complete",
+        reason: text.slice("complete".length).trim() || "The verified goal is complete.",
+      });
+    }
     if (command === "off") {
-      this.savePrivate({ active: false, manualOff: true, autoResumeTurns: 0, pendingResumeToken: null, hintsThisSession: 0 });
+      this.savePrivate({
+        active: false,
+        manualOff: true,
+        loopState: "stopped",
+        completionReason: "Stopped by the user.",
+        completedAt: null,
+        decisionQuestion: null,
+        autoResumeTurns: 0,
+        pendingResumeToken: null,
+        hintsThisSession: 0,
+      });
       return { ok: true, active: false, text: "Autoresearch is off. Any pending automatic continuation was cancelled." };
     }
     if (command === "clear") {
       for (const candidate of Object.values(sessionFileCandidates(this.workDir(), "log"))) {
         try { fs.unlinkSync(candidate); } catch (error) { if (error.code !== "ENOENT") throw error; }
       }
-      this.savePrivate({ active: false, manualOff: false, pendingNewGoal: false, goal: null, autoResumeTurns: 0, pendingResumeToken: null, lastRunChecks: null, lastRunDuration: null, hintsThisSession: 0 });
+      this.savePrivate({
+        active: false,
+        manualOff: false,
+        loopState: "idle",
+        completionReason: null,
+        completedAt: null,
+        decisionQuestion: null,
+        pendingNewGoal: false,
+        goal: null,
+        autoResumeTurns: 0,
+        pendingResumeToken: null,
+        lastRunChecks: null,
+        lastRunDuration: null,
+        hintsThisSession: 0,
+      });
       return { ok: true, active: false, text: "Autoresearch log cleared and automatic continuation stopped." };
     }
     if (command === "export") {
@@ -988,6 +1072,10 @@ export class AutoresearchController {
     this.savePrivate({
       active: true,
       manualOff: false,
+      loopState: "active",
+      completionReason: null,
+      completedAt: null,
+      decisionQuestion: null,
       sessionEpoch: isNewGoal ? previousPrivate.sessionEpoch + 1 : previousPrivate.sessionEpoch,
       goal: isNewGoal ? text : previousPrivate.goal,
       pendingNewGoal: isNewGoal ? true : previousPrivate.pendingNewGoal,
@@ -1049,7 +1137,18 @@ export class AutoresearchController {
       bestDirection: direction === "higher" ? "higher" : "lower",
     };
     fs.appendFileSync(jsonlPath, `${JSON.stringify(entry)}\n`);
-    this.savePrivate({ active: true, manualOff: false, pendingNewGoal: false, pendingResumeToken: null, lastRunChecks: null, lastRunDuration: null });
+    this.savePrivate({
+      active: true,
+      manualOff: false,
+      loopState: "active",
+      completionReason: null,
+      completedAt: null,
+      decisionQuestion: null,
+      pendingNewGoal: false,
+      pendingResumeToken: null,
+      lastRunChecks: null,
+      lastRunDuration: null,
+    });
     this.notifyChange();
     const before = await this.fireHook("before", {
       next_run: previous.results.length + 1,
@@ -1079,7 +1178,15 @@ export class AutoresearchController {
     const config = this.config();
     const currentRuns = persisted.results.filter((run) => run.segment === persisted.currentSegment);
     if (Number.isFinite(config.maxIterations) && currentRuns.length >= Math.floor(config.maxIterations)) {
-      this.savePrivate({ active: false, pendingResumeToken: null });
+      this.savePrivate({
+        active: false,
+        manualOff: false,
+        loopState: "stopped",
+        completionReason: `Maximum experiments reached (${Math.floor(config.maxIterations)}).`,
+        completedAt: null,
+        decisionQuestion: null,
+        pendingResumeToken: null,
+      });
       return { ok: false, active: false, text: `Maximum experiments reached (${Math.floor(config.maxIterations)}).` };
     }
     if (!command) return { ok: false, text: "command is required." };
@@ -1164,7 +1271,18 @@ export class AutoresearchController {
     };
   }
 
-  async logExperiment({ commit = "", metric, metrics = {}, status, description = "", asi, force = false } = {}) {
+  async logExperiment({
+    commit = "",
+    metric,
+    metrics = {},
+    status,
+    description = "",
+    asi,
+    force = false,
+    next_action,
+    decision_reason = "",
+    user_question = "",
+  } = {}) {
     const privateState = this.privateState();
     if (!privateState.active || privateState.manualOff) return { ok: false, text: "Autoresearch is not active." };
     const pending = this.pendingGate(privateState);
@@ -1177,6 +1295,15 @@ export class AutoresearchController {
     }
     if (!objectRecord(metrics) || Object.values(metrics).some((value) => !Number.isFinite(value))) {
       return { ok: false, text: "metrics must contain only finite numbers." };
+    }
+    if (!["continue", "complete", "needs_user"].includes(next_action)) {
+      return { ok: false, text: "next_action must be continue, complete, or needs_user." };
+    }
+    const decisionReason = String(decision_reason).trim();
+    if (!decisionReason) return { ok: false, text: "decision_reason is required." };
+    const userQuestion = String(user_question).trim();
+    if (next_action === "needs_user" && !userQuestion) {
+      return { ok: false, text: "user_question is required when next_action is needs_user." };
     }
     if (status === "keep" && privateState.lastRunChecks && !privateState.lastRunChecks.pass) {
       return { ok: false, text: `Cannot keep because .auto/checks.sh failed. Log checks_failed instead.\n${String(privateState.lastRunChecks.output).slice(-500)}` };
@@ -1241,6 +1368,9 @@ export class AutoresearchController {
     }
 
     const currentSegmentRuns = persisted.results.filter((run) => run.segment === persisted.currentSegment);
+    if (next_action === "complete" && status !== "keep" && !currentSegmentRuns.some((run) => run.status === "keep")) {
+      return { ok: false, text: "Cannot complete without a kept result in the current goal." };
+    }
     const provisional = {
       run: persisted.results.length + 1,
       commit: resolvedCommit,
@@ -1269,16 +1399,10 @@ export class AutoresearchController {
       gitText = restored.ok
         ? "已自动撤销本轮变化，实验记录已保留。"
         : `已撤销普通文件；另有 ${restored.warnings.length} 个特殊路径需要你确认。`;
-      if (rollbackNeedsDecision) {
-        this.savePrivate({ active: false, pendingResumeToken: null, protectionMode: "snapshot" });
-      }
     }
 
     const after = await this.fireHook("after", { run_entry: provisional });
-    const before = await this.fireHook("before", {
-      next_run: provisional.run + 1,
-      last_run: provisional,
-    });
+    let before = { steer: null };
     const segmentCount = currentSegmentRuns.length + 1;
     const config = this.config();
     const maxIterations = Number.isFinite(config.maxIterations) && config.maxIterations > 0
@@ -1291,19 +1415,77 @@ export class AutoresearchController {
         : DEFAULT_MAX_AUTORESUME_TURNS;
     let resume = { shouldSchedule: false, command: null, token: null };
     let stopText = "";
+    let needsDecision = false;
+    let loopState = "active";
     if (rollbackNeedsDecision) {
-      this.savePrivate({ active: false, pendingResumeToken: null, lastRunChecks: null, lastRunDuration: null });
+      needsDecision = true;
+      loopState = "awaiting_user";
+      this.savePrivate({
+        active: false,
+        manualOff: false,
+        loopState,
+        completionReason: "Some protected paths need a user decision before the loop can continue.",
+        completedAt: null,
+        decisionQuestion: "检测到特殊路径，是否换到具体项目目录后继续？",
+        pendingResumeToken: null,
+        lastRunChecks: null,
+        lastRunDuration: null,
+      });
       stopText = "检测到特殊路径，循环已安全暂停；请确认后再继续。";
+    } else if (next_action === "complete") {
+      loopState = "completed";
+      const finished = await this.finish({ outcome: "complete", reason: decisionReason });
+      stopText = finished.text;
+    } else if (next_action === "needs_user") {
+      needsDecision = true;
+      loopState = "awaiting_user";
+      const waiting = await this.finish({
+        outcome: "needs_user",
+        reason: decisionReason,
+        user_question: userQuestion,
+      });
+      stopText = waiting.text;
     } else if (maxIterations !== null && segmentCount >= maxIterations) {
-      this.savePrivate({ active: false, pendingResumeToken: null, lastRunChecks: null, lastRunDuration: null });
+      loopState = "stopped";
+      this.savePrivate({
+        active: false,
+        manualOff: false,
+        loopState,
+        completionReason: `Maximum experiments reached (${maxIterations}).`,
+        completedAt: null,
+        decisionQuestion: null,
+        pendingResumeToken: null,
+        lastRunChecks: null,
+        lastRunDuration: null,
+      });
       stopText = `Maximum experiments reached (${maxIterations}). The loop is stopped.`;
     } else if (maxAutoResumeTurns !== null && privateState.autoResumeTurns >= maxAutoResumeTurns) {
-      this.savePrivate({ active: false, pendingResumeToken: null, lastRunChecks: null, lastRunDuration: null });
+      loopState = "stopped";
+      this.savePrivate({
+        active: false,
+        manualOff: false,
+        loopState,
+        completionReason: `Automatic continuation safety limit reached (${maxAutoResumeTurns}).`,
+        completedAt: null,
+        decisionQuestion: null,
+        pendingResumeToken: null,
+        lastRunChecks: null,
+        lastRunDuration: null,
+      });
       stopText = `Automatic continuation safety limit reached (${maxAutoResumeTurns}). Run /autoresearch resume to continue.`;
     } else {
+      before = await this.fireHook("before", {
+        next_run: provisional.run + 1,
+        last_run: provisional,
+      });
       const token = randomBytes(18).toString("hex");
       const nextPrivate = this.savePrivate({
         active: true,
+        manualOff: false,
+        loopState: "active",
+        completionReason: null,
+        completedAt: null,
+        decisionQuestion: null,
         pendingResumeToken: token,
         autoResumeTurns: privateState.autoResumeTurns + 1,
         lastRunChecks: null,
@@ -1330,6 +1512,10 @@ export class AutoresearchController {
       ].filter(Boolean).join("\n"),
       details: { experiment: provisional, state: this.persisted(), wallClockSeconds: privateState.lastRunDuration },
       resume,
+      needsDecision,
+      loopState,
+      completionReason: decisionReason,
+      decisionQuestion: needsDecision ? this.privateState().decisionQuestion : null,
     };
   }
 
@@ -1344,11 +1530,16 @@ export class AutoresearchController {
       return persisted.bestDirection === "lower" ? Math.min(best, run.metric) : Math.max(best, run.metric);
     }, kept[0].metric);
     const active = privateState.active === true && privateState.manualOff !== true;
+    const loopState = privateState.loopState ?? (active ? "active" : privateState.manualOff ? "stopped" : "idle");
     const resume = this.resumeFor(privateState);
     return {
       ok: true,
       active,
       manualOff: privateState.manualOff === true,
+      loopState,
+      completionReason: privateState.completionReason ?? null,
+      completedAt: privateState.completedAt ?? null,
+      decisionQuestion: privateState.decisionQuestion ?? null,
       pendingNewGoal: privateState.pendingNewGoal === true,
       sessionEpoch: privateState.sessionEpoch,
       currentSegmentRuns: current.length,
@@ -1357,7 +1548,11 @@ export class AutoresearchController {
       metricName: privateState.pendingNewGoal ? "metric" : persisted.metricName,
       pendingContinuation: Boolean(privateState.pendingResumeToken),
       resume,
-      text: privateState.pendingNewGoal && active
+      text: loopState === "awaiting_user"
+        ? `Autoresearch is waiting for the user: ${privateState.decisionQuestion ?? privateState.completionReason ?? "A decision is required."}`
+        : loopState === "completed"
+          ? `Autoresearch completed: ${privateState.completionReason ?? "The verified goal is complete."}`
+        : privateState.pendingNewGoal && active
         ? `Autoresearch is preparing a fresh segment for the new goal: ${privateState.goal ?? "untitled goal"}.`
         : resume.shouldSchedule
         ? [
@@ -1403,6 +1598,10 @@ export class AutoresearchController {
       workDir,
       active: privateState.active === true && privateState.manualOff !== true,
       manualOff: privateState.manualOff === true,
+      loopState: privateState.loopState ?? (privateState.active ? "active" : privateState.manualOff ? "stopped" : "idle"),
+      completionReason: privateState.completionReason ?? null,
+      completedAt: privateState.completedAt ?? null,
+      decisionQuestion: privateState.decisionQuestion ?? null,
       pendingNewGoal: privateState.pendingNewGoal === true,
       needsSetup: privateState.pendingNewGoal === true || !hasHeader || !hasPrompt,
       pendingContinuation: Boolean(privateState.pendingResumeToken),

@@ -14,7 +14,8 @@ Before doing anything, call `autoresearch_status`. If it is inactive, stop and t
 
 - **`autoresearch_init_experiment`** — configure session (name, metric, unit, direction). Call again to re-initialize with a new baseline when the optimization target changes.
 - **`autoresearch_run_experiment`** — runs a command, times it, captures output, and parses metrics.
-- **`autoresearch_log_experiment`** — records a result. `keep` advances the local protection point (and commits when the current repository is clean and safe to use). `discard`/`crash`/`checks_failed` restore protected code while preserving autoresearch files. Always include secondary `metrics`.
+- **`autoresearch_log_experiment`** — records a result and atomically requires `next_action=continue|complete|needs_user` plus an evidence-based `decision_reason`. `needs_user` also requires the exact `user_question`. `keep` advances the local protection point; `discard`/`crash`/`checks_failed` restore protected code while preserving autoresearch files.
+- **`autoresearch_finish`** — closes the durable loop after later read-only verification, or pauses it for a user decision. Call it before claiming completion when no new experiment is being logged.
 - **`the optional hint tool (disabled by default)`** — optional advisory side-model hint, available only when the user explicitly enables it in config.
 
 ## Session files
@@ -40,7 +41,7 @@ All session files live in a single `.auto/` subfolder at the working directory r
 3. Read the source files. Understand the workload deeply before writing anything.
 4. Create `.auto/prompt.md` and `.auto/measure.sh` with file write/edit tools (see below). Do not create a branch or commit manually.
 5. Modify source through file write/edit tools so the pre-execute hook can save each file before its first mutation. Do not modify source with shell redirection, `sed -i`, `rm`, or generated overwrite commands; use Bash only for read-only inspection, builds, tests, and benchmarks.
-6. `autoresearch_init_experiment` -> run baseline -> `autoresearch_log_experiment` -> start looping immediately.
+6. `autoresearch_init_experiment` -> run baseline -> `autoresearch_log_experiment` with `next_action=continue` -> start looping immediately.
 
 ### `.auto/prompt.md`
 
@@ -99,6 +100,8 @@ The script runs the same code every iteration — but you can **update it during
 #### Agent-supplied ASI via `autoresearch_log_experiment`
 
 Use `autoresearch_log_experiment`'s `asi` parameter to annotate each run with **whatever would help the next iteration make a better decision.** Free-form key/value pairs — you decide what's worth recording. Don't repeat the description or raw output; capture what you'd lose after a context reset.
+
+Every log must also make exactly one durable lifecycle decision: `continue` when another safe experiment has positive value, `complete` when the explicit goal and guardrails are verified, or `needs_user` when further progress requires a product/tradeoff choice. Never encode this decision only in prose.
 
 **Annotate failures and crashes heavily.** Discarded and crashed runs are reverted — the code changes are gone. The only record that survives is the description and ASI in `.auto/log.jsonl`. If you don't capture what you tried and why it failed, future iterations will waste time re-discovering the same dead ends.
 
@@ -164,7 +167,7 @@ pnpm typecheck 2>&1 | grep -i error || true
 
 ## Loop Rules
 
-**LOOP FOREVER.** Never ask "should I continue?" — the user expects autonomous work.
+**RUN AUTONOMOUSLY, END TRUTHFULLY.** Do not ask routine “should I continue?” questions, but do not leave the controller active after the verified goal is complete.
 
 - **Primary metric is king.** Improved → `keep`. Worse/equal → `discard`. Secondary metrics rarely affect this.
 - **Annotate every run with `asi`.** Record what you learned — not what you did. What would help the next iteration or a fresh agent resuming this session?
@@ -174,8 +177,10 @@ pnpm typecheck 2>&1 | grep -i error || true
 - **Crashes:** fix if trivial, otherwise log and move on. Don't over-invest.
 - **Think longer when stuck.** Re-read source files, study the profiling data, reason about what the CPU is actually doing. The best ideas come from deep understanding, not from trying random variations.
 - **Resuming:** if `.auto/prompt.md` exists, read it and `.auto/log.jsonl`, then continue looping. Git knowledge is never required.
+- **Completion is structured:** use `next_action=complete` in the final log. If completion becomes clear after later verification, call `autoresearch_finish(outcome=complete)` before the final answer.
+- **User decisions are explicit:** use `next_action=needs_user` or `autoresearch_finish(outcome=needs_user)`, ask the exact `user_question` through the host decision UI, and stop automatic work until the answer arrives.
 
-**NEVER STOP.** The user may be away for hours. Keep going until interrupted.
+Keep going while the loop state is active and another safe experiment has value. Stop automatically on `completed`, `awaiting_user`, configured limits, blockers, or user interruption.
 
 ## Ideas Backlog
 

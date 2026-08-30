@@ -241,7 +241,7 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 - CSS architecture: component-local React styles plus one scoped responsive/focus style block; the header panel is portaled to `document.body` and positioned with the host anchored-position helper; DSH semantic variables remain runtime truth.
 - Token implementation: constants map to the front-matter roles and host aliases.
 - Component naming: `ProgressCard` with named outcome, history, and state-action zones.
-- State naming: preparing, running, ended, dismissed, and superseded-by-new-goal.
+- State naming: preparing, executing, active-ready, awaiting-user, completed, stopped, dismissed, and superseded-by-new-goal. Durable completion is a structured controller transition, never inferred from prose.
 - Theme strategy: inherit DSH semantic variables with accessible light fallbacks.
 - Dark mode: provided by host variables; no fixed white text assumptions.
 - Framework notes: React 18 client bundle through DSHX external client bundling.
@@ -253,13 +253,13 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 
 ## Assumptions
 
-- An inactive controller with at least one logged result is truthfully `本轮已结束`; only the Agent or user can decide whether the target was semantically achieved.
+- Completion is a structured controller transition; inactive-with-results is not guessed to mean success.
 - Existing DSH semantic variables provide sufficient dark-theme contrast.
 - Historical rows remain in `.auto/log.jsonl`; the UI scopes them by the current experiment segment.
 
 ## Open Questions
 
-- A future version may add an explicit model-side `complete` outcome distinct from manual stop; it is not required to fix the current false Pause action.
+- A future DSH release may expose a public external event-vocabulary registry; this plugin remains on official command/tool events until that contract exists.
 
 ## Review Log
 
@@ -269,3 +269,5 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 | 0.2 | 2026-08-30 | Accepted outcome-first card in running/ended states at 1180 px and 390 px | Pinned Playwright found four semantic zones, zero overflow/errors, 44 px actions, visible focus, and correct lifecycle copy | Codex |
 | 0.3 | 2026-08-30 | Move monitoring to a collapsed session-header utility and strengthen panel figure/ground | User reported weak boundary contrast and loss of transcript reading space | Codex |
 | 0.4 | 2026-08-30 | Accept the header monitor at 1280 px and 390 px | Same-page pinned-browser verification confirmed 1 px panel/outcome borders, distinct tonal surfaces, 12 px viewport clearance, zero overflow/errors, and keyboard/outside-click dismissal | Codex |
+| 0.5 | 2026-08-30 | Bind the header monitor to structured continue/complete/needs-user transitions | A completed Agent answer previously left `active=true`; atomic lifecycle decisions now prevent stale working state and preserve explicit user authority for tradeoffs | Codex |
+| 0.6 | 2026-08-30 | Remove future custom session writes and migrate legacy state envelopes with backup plus official reload validation | DSH intentionally refuses unknown required external events, so plugin-only state must ride the official command/tool vocabulary | Codex |

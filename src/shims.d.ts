@@ -87,6 +87,6 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
     autoresearch: import('./types.ts').AutoresearchSnapshot | null
   }
   interface SessionProjectionStateMap {
-    autoresearch: import('./types.ts').AutoresearchSnapshot | null
+    autoresearch: import('./types.ts').AutoresearchProjectionState
   }
 }

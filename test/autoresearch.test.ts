@@ -14,16 +14,23 @@ import {
   queueAutoresearchFollowup,
 } from '../src/index.ts'
 import { reconstructJsonlState } from '../src/jsonl.ts'
-import { repairAutoresearchSessionJsonl } from '../src/recovery.ts'
+import { markAutoresearchStateEventsIgnorable, repairAutoresearchSessionJsonl } from '../src/recovery.ts'
+import { migrateLegacyAutoresearchSessions } from '../src/legacy-session-migration.ts'
 import { appendHookLogEntryIfConfigured, runHook } from '../src/hooks.ts'
 import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from '../src/compaction.ts'
 import { sessionFilePath } from '../src/paths.ts'
 import { evaluatePendingGuard } from '../src/guard.ts'
 import { CONTINUE_MARKER, toJsonValue } from '../src/types.ts'
 import { CONTINUE_PLAYBOOK, CREATE_PLAYBOOK } from '../src/playbook.ts'
-import { foldAutoresearchProjection, preferLedgerSnapshot } from '../src/projection.ts'
+import {
+  foldAutoresearchProjection,
+  foldAutoresearchSnapshot,
+  initialAutoresearchProjectionState,
+  preferLedgerSnapshot,
+} from '../src/projection.ts'
 import {
   applyCommandText,
+  applyCommandAcknowledgement,
   buildStartLine,
   cancelInitDock,
   dismissProgress,
@@ -34,6 +41,8 @@ import {
   isProgressDismissed,
   parseRoundBudget,
   progressIdentity,
+  recordCommandAcknowledgement,
+  rememberSession,
   resetLab,
   showInitDock,
   startDecisionMessage,
@@ -141,6 +150,94 @@ test('session recovery refuses unidentified messages outside known Autoresearch 
   assert.throws(() => repairAutoresearchSessionJsonl(input), /refusing unknown unidentified user message/)
 })
 
+test('legacy custom state events become ignorable without changing payload or sequence', () => {
+  const snapshot = emptySnapshot({ results: [sampleRun({ run: 1, metric: 90, status: 'keep' })] })
+  const records = [
+    { version: 0, id: 'session-state-migration', createdAt: 1 },
+    { type: 'turn/start', seq: 0, time: 1, data: { turnId: 'turn-1' } },
+    { type: 'autoresearch/state', seq: 1, time: 2, data: { snapshot } },
+    { type: 'turn/end', seq: 2, time: 3, data: { turnId: 'turn-1', outcome: 'completed' } },
+  ]
+  const input = `${records.map(record => JSON.stringify(record)).join('\n')}\n`
+  const result = markAutoresearchStateEventsIgnorable(input)
+  const parsed = result.jsonl.trim().split('\n').map(line => JSON.parse(line))
+  assert.deepEqual(result.markedEventSeqs, [1])
+  assert.equal(parsed[2].ignorable, true)
+  assert.deepEqual(parsed[2].data, records[2]?.data)
+  assert.equal(parsed[1].ignorable, undefined)
+  assert.equal(markAutoresearchStateEventsIgnorable(result.jsonl).markedEventSeqs.length, 0)
+})
+
+test('legacy session migration backs up, atomically rewrites, validates, and marks completion', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-migration-'))
+  const dshHome = path.join(root, '.dsh')
+  const cwd = path.join(root, 'workspace')
+  const stateDir = path.join(dshHome, 'autoresearch', 'state')
+  const sessionDir = path.join(dshHome, 'sessions', 'project', 'session-migrate')
+  fs.mkdirSync(stateDir, { recursive: true })
+  fs.mkdirSync(sessionDir, { recursive: true })
+  fs.writeFileSync(path.join(stateDir, 'workspace.json'), JSON.stringify({ cwd }))
+  const target = path.join(sessionDir, 'session.jsonl')
+  const snapshot = emptySnapshot({ cwd, workDir: cwd, results: [sampleRun({ run: 1, metric: 90, status: 'keep' })] })
+  const raw = [
+    { version: 0, id: 'session-migrate', createdAt: 1, cwd },
+    { type: 'autoresearch/state', seq: 0, time: 1, data: { snapshot } },
+  ].map(record => JSON.stringify(record)).join('\n') + '\n'
+  fs.writeFileSync(target, raw)
+  let inspectCount = 0
+  const persistence = {
+    supportsRawArtifacts: true,
+    async list() { return [{ id: 'session-migrate', cwd }] },
+    async readRaw() { return { meta: { id: 'session-migrate', cwd }, content: fs.readFileSync(target, 'utf8') } },
+    locate() { return { kind: 'jsonl', path: target } },
+    async inspect() {
+      inspectCount += 1
+      const events = fs.readFileSync(target, 'utf8').trim().split('\n').slice(1).map(line => JSON.parse(line))
+      assert.ok(events.every(event => event.type !== 'autoresearch/state' || event.ignorable === true))
+      return { events }
+    },
+  }
+  const report = await migrateLegacyAutoresearchSessions(persistence, { dshHome })
+  assert.equal(report.failures.length, 0)
+  assert.equal(report.repaired.length, 1)
+  assert.equal(inspectCount, 1)
+  assert.ok(fs.existsSync(report.repaired[0]?.backupPath ?? ''))
+  assert.equal(fs.readFileSync(report.repaired[0]?.backupPath ?? '', 'utf8'), raw)
+  assert.ok(fs.existsSync(report.markerPath))
+  const second = await migrateLegacyAutoresearchSessions(persistence, { dshHome })
+  assert.equal(second.alreadyComplete, true)
+  assert.equal(inspectCount, 1)
+})
+
+test('legacy session migration restores the original when official validation refuses it', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-migration-rollback-'))
+  const dshHome = path.join(root, '.dsh')
+  const cwd = path.join(root, 'workspace')
+  const stateDir = path.join(dshHome, 'autoresearch', 'state')
+  const sessionDir = path.join(dshHome, 'sessions', 'project', 'session-refuse')
+  fs.mkdirSync(stateDir, { recursive: true })
+  fs.mkdirSync(sessionDir, { recursive: true })
+  fs.writeFileSync(path.join(stateDir, 'workspace.json'), JSON.stringify({ cwd }))
+  const target = path.join(sessionDir, 'session.jsonl')
+  const snapshot = emptySnapshot({ cwd, workDir: cwd, results: [sampleRun({ run: 1, metric: 90, status: 'keep' })] })
+  const raw = [
+    { version: 0, id: 'session-refuse', createdAt: 1, cwd },
+    { type: 'autoresearch/state', seq: 0, time: 1, data: { snapshot } },
+  ].map(record => JSON.stringify(record)).join('\n') + '\n'
+  fs.writeFileSync(target, raw)
+  const report = await migrateLegacyAutoresearchSessions({
+    supportsRawArtifacts: true,
+    async list() { return [{ id: 'session-refuse', cwd }] },
+    async readRaw() { return { meta: { id: 'session-refuse', cwd }, content: raw } },
+    locate() { return { kind: 'jsonl', path: target } },
+    async inspect() { throw new Error('synthetic official refusal') },
+  }, { dshHome })
+  assert.equal(report.repaired.length, 0)
+  assert.equal(report.failures.length, 1)
+  assert.equal(fs.readFileSync(target, 'utf8'), raw)
+  assert.equal(fs.existsSync(report.markerPath), false)
+})
+
 test('session paths preserve current-layout precedence over stale legacy peers', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-paths-'))
   fs.writeFileSync(path.join(cwd, 'autoresearch.md'), 'legacy')
@@ -169,6 +266,10 @@ function emptySnapshot(overrides: Partial<AutoresearchSnapshot> = {}): Autoresea
     workDir: '/tmp',
     active: false,
     manualOff: false,
+    loopState: 'idle',
+    completionReason: null,
+    completedAt: null,
+    decisionQuestion: null,
     pendingNewGoal: false,
     needsSetup: true,
     pendingContinuation: false,
@@ -444,10 +545,10 @@ test('projection fold keeps the longer ledger from later tool results', () => {
       sampleRun({ run: 3, metric: 12, status: 'discard' }),
     ],
   })
-  const afterFirst = foldAutoresearchProjection(null, { type: 'tool/result', data: { meta: { snapshot: first } } })
-  const afterLater = foldAutoresearchProjection(afterFirst, { type: 'tool/result', data: { meta: { snapshot: later } } })
+  const afterFirst = foldAutoresearchSnapshot(null, { type: 'tool/result', data: { meta: { snapshot: first } } })
+  const afterLater = foldAutoresearchSnapshot(afterFirst, { type: 'tool/result', data: { meta: { snapshot: later } } })
   assert.equal(afterLater?.results.length, 3)
-  const ignoredShrink = foldAutoresearchProjection(afterLater, { type: 'tool/result', data: { meta: { snapshot: first } } })
+  const ignoredShrink = foldAutoresearchSnapshot(afterLater, { type: 'tool/result', data: { meta: { snapshot: first } } })
   assert.equal(ignoredShrink?.results.length, 3)
   assert.equal(ignoredShrink, afterLater)
   assert.equal(preferLedgerSnapshot(first, later)?.results.length, 3)
@@ -465,13 +566,128 @@ test('command state events can end a card without adding another ledger row', ()
     updatedAt: 10,
   })
   const ended = emptySnapshot({ ...active, active: false, manualOff: true, updatedAt: 20 })
-  const folded = foldAutoresearchProjection(active, {
+  const folded = foldAutoresearchSnapshot(active, {
     type: 'autoresearch/state',
     data: { snapshot: ended },
   })
   assert.equal(folded?.active, false)
   assert.equal(folded?.manualOff, true)
   assert.equal(folded?.results.length, 1)
+})
+
+test('official command lifecycle completes the projection without a custom event', () => {
+  const active = emptySnapshot({
+    active: true,
+    loopState: 'active',
+    sessionEpoch: 2,
+    currentSegment: 1,
+    results: [sampleRun({ run: 1, segment: 1, metric: 90, status: 'keep' })],
+    updatedAt: 10,
+  })
+  const initial = { ...initialAutoresearchProjectionState(), snapshot: active }
+  const running = foldAutoresearchProjection(initial, {
+    type: 'command/run',
+    time: 20,
+    data: { commandId: 'cmd-complete', name: 'autoresearch', args: ' complete stable 90 fps', source: { kind: 'user' } },
+  })
+  const completed = foldAutoresearchProjection(running, {
+    type: 'command/done',
+    time: 21,
+    data: { commandId: 'cmd-complete', kind: 'success', text: 'completed' },
+  })
+  assert.equal(completed.snapshot?.active, false)
+  assert.equal(completed.snapshot?.loopState, 'completed')
+  assert.equal(completed.snapshot?.completionReason, 'stable 90 fps')
+  assert.equal(completed.snapshot?.results.length, 1)
+  assert.deepEqual(completed.pendingCommands, {})
+})
+
+test('legacy progress evidence survives cold projection reads and terminal commands', () => {
+  const active = emptySnapshot({
+    active: true,
+    loopState: 'active',
+    results: [sampleRun({ run: 1, metric: 90, status: 'keep' })],
+  })
+  const legacy = foldAutoresearchProjection(initialAutoresearchProjectionState(), {
+    type: 'autoresearch/state',
+    data: { snapshot: active },
+  })
+  assert.equal(legacy.boardReady, true)
+  const running = foldAutoresearchProjection(legacy, {
+    type: 'command/run',
+    data: { commandId: 'cmd-complete-cold', name: 'autoresearch', args: ' complete done' },
+  })
+  const completed = foldAutoresearchProjection(running, {
+    type: 'command/done',
+    time: 100,
+    data: { commandId: 'cmd-complete-cold', kind: 'success' },
+  })
+  assert.equal(completed.boardReady, true)
+  assert.equal(completed.snapshot?.loopState, 'completed')
+})
+
+test('local command acknowledgement closes the working state before a cold projection refresh', () => {
+  resetLab()
+  rememberSession('session-ack')
+  recordCommandAcknowledgement('session-ack', 'Autoresearch completed: verified target')
+  const applied = applyCommandAcknowledgement(emptySnapshot({
+    active: true,
+    loopState: 'active',
+    results: [sampleRun({ run: 1, metric: 90, status: 'keep' })],
+  }), getLabState().commandAck, 'session-ack')
+  assert.equal(applied?.active, false)
+  assert.equal(applied?.loopState, 'completed')
+  assert.equal(applied?.completionReason, 'verified target')
+})
+
+test('terminal projection overlays lifecycle without replacing a real ledger with a legacy zero-run shell', () => {
+  const conversation = emptySnapshot({
+    active: true,
+    loopState: 'active',
+    sessionEpoch: 1,
+    currentSegment: 2,
+    name: 'real-ledger',
+    results: [
+      sampleRun({ run: 1, metric: 80, status: 'keep', segment: 2 }),
+      sampleRun({ run: 2, metric: 90, status: 'keep', segment: 2 }),
+    ],
+  })
+  const legacyShell = emptySnapshot({
+    active: false,
+    loopState: 'completed',
+    completionReason: 'verified target',
+    completedAt: 200,
+    updatedAt: 200,
+    pendingNewGoal: true,
+    sessionEpoch: 2,
+    currentSegment: 3,
+    name: 'phantom-goal',
+    results: [sampleRun({ run: 1, metric: 80, status: 'keep', segment: 1 })],
+  })
+  const merged = preferLedgerSnapshot(conversation, legacyShell)
+  assert.equal(merged?.name, 'real-ledger')
+  assert.equal(merged?.results.length, 2)
+  assert.equal(merged?.loopState, 'completed')
+  assert.equal(merged?.active, false)
+  assert.equal(merged?.completionReason, 'verified target')
+
+  const activeNewGoal = { ...legacyShell, active: true, loopState: 'active' as const }
+  assert.equal(preferLedgerSnapshot(conversation, activeNewGoal)?.name, 'phantom-goal')
+})
+
+test('failed official command leaves projected lifecycle unchanged', () => {
+  const active = emptySnapshot({ active: true, loopState: 'active' })
+  const initial = { ...initialAutoresearchProjectionState(), snapshot: active }
+  const running = foldAutoresearchProjection(initial, {
+    type: 'command/run',
+    data: { commandId: 'cmd-off', name: 'autoresearch', args: ' off' },
+  })
+  const failed = foldAutoresearchProjection(running, {
+    type: 'command/done',
+    data: { commandId: 'cmd-off', kind: 'error', text: 'refused' },
+  })
+  assert.equal(failed.snapshot, active)
+  assert.deepEqual(failed.pendingCommands, {})
 })
 
 test('a newer goal epoch supersedes a longer old ledger before its first baseline', () => {
@@ -500,7 +716,7 @@ test('a newer goal epoch supersedes a longer old ledger before its first baselin
     updatedAt: 20,
   })
 
-  const folded = foldAutoresearchProjection(old, {
+  const folded = foldAutoresearchSnapshot(old, {
     type: 'tool/result',
     data: { meta: { snapshot: preparing } },
   })
@@ -522,6 +738,24 @@ test('ended progress uses a close lifecycle instead of a running action', () => 
 
   assert.equal(buildDashboardModel(ended).lifecycle, 'ended')
   assert.equal(buildDashboardModel(running).lifecycle, 'running')
+})
+
+test('dashboard preserves completed and awaiting-user lifecycle truth', () => {
+  const completed = emptySnapshot({
+    active: false,
+    results: [sampleRun({ run: 1, metric: 100, status: 'keep' })],
+    loopState: 'completed',
+    completionReason: 'Verified target reached.',
+  } as Partial<AutoresearchSnapshot>)
+  const awaiting = emptySnapshot({
+    active: false,
+    results: completed.results,
+    loopState: 'awaiting_user',
+    decisionQuestion: '是否接受画质变化？',
+  } as Partial<AutoresearchSnapshot>)
+
+  assert.equal(buildDashboardModel(completed).lifecycle, 'completed')
+  assert.equal(buildDashboardModel(awaiting).lifecycle, 'awaiting_user')
 })
 
 test('closing a result dismisses only that goal identity', () => {
@@ -638,6 +872,20 @@ test('monitor lives in a collapsed header utility while the composer keeps only 
   assert.doesNotMatch(dock, /<WaitingCard/)
 })
 
+test('every real log records a structured next decision and the UI does not equate armed with executing', () => {
+  const host = fs.readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  const playbook = fs.readFileSync(new URL('../src/playbook.ts', import.meta.url), 'utf8')
+  const client = fs.readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  assert.match(host, /next_action:\s*\{[^}]*required:\s*true[^}]*continue[^}]*complete[^}]*needs_user/s)
+  assert.match(host, /decision_reason:\s*\{[^}]*required:\s*true/s)
+  assert.match(host, /name:\s*'autoresearch_finish'/)
+  assert.match(playbook, /next_action/)
+  assert.match(playbook, /autoresearch_finish/)
+  assert.match(client, /data-state='ready'/)
+  assert.match(client, /等待你拍板/)
+  assert.match(client, /目标已完成/)
+})
+
 test('internal finalize and hooks skills stay out of ordinary user autocomplete', () => {
   const source = fs.readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
   for (const name of ['autoresearch-finalize', 'autoresearch-hooks']) {
@@ -707,7 +955,7 @@ test('empty startup scope stays fast and learns the first edited file before mut
   assert.deepEqual(controller.privateState().protectedPaths, ['project/target.txt'])
   fs.writeFileSync(path.join(cwd, 'project', 'target.txt'), 'candidate\n')
   await controller.initExperiment({ name: 'dynamic scope', metric_name: 'score' })
-  const discarded = await controller.logExperiment({ metric: 2, status: 'discard', description: 'worse' })
+  const discarded = await controller.logExperiment({ metric: 2, status: 'discard', description: 'worse', next_action: 'continue', decision_reason: 'Try the next safe hypothesis.' })
   assert.equal(discarded.ok, true)
   assert.equal(fs.readFileSync(path.join(cwd, 'project', 'target.txt'), 'utf8'), 'before\n')
   assert.equal(fs.readFileSync(path.join(cwd, 'large-neighbor', '1999.txt'), 'utf8'), 'unrelated\n')
@@ -737,7 +985,7 @@ test('missing Git silently falls back to local snapshots and still restores edit
 
     fs.writeFileSync(path.join(cwd, 'target.txt'), 'candidate\n')
     await controller.initExperiment({ name: 'snapshot fallback', metric_name: 'score' })
-    const discarded = await controller.logExperiment({ metric: 2, status: 'discard', description: 'worse' })
+    const discarded = await controller.logExperiment({ metric: 2, status: 'discard', description: 'worse', next_action: 'continue', decision_reason: 'Try the next safe hypothesis.' })
     assert.equal(discarded.ok, true)
     assert.equal(fs.readFileSync(path.join(cwd, 'target.txt'), 'utf8'), 'before\n')
     assert.doesNotMatch(discarded.text, /git|enoent|spawn|failed/i)
@@ -778,7 +1026,7 @@ test('automatic setup protects the session working set without scanning an umbre
   await controller.initExperiment({ name: 'particle fps', metric_name: 'fps', direction: 'higher' })
   fs.writeFileSync(path.join(cwd, 'ink-particle-wall.html'), 'candidate\n')
   fs.writeFileSync(path.join(noiseDir, 'keep-me.txt'), 'unrelated user work\n')
-  const discarded = await controller.logExperiment({ metric: 30, status: 'discard', description: 'slow candidate' })
+  const discarded = await controller.logExperiment({ metric: 30, status: 'discard', description: 'slow candidate', next_action: 'continue', decision_reason: 'Try the next safe hypothesis.' })
   assert.equal(discarded.ok, true)
   assert.equal(fs.readFileSync(path.join(cwd, 'ink-particle-wall.html'), 'utf8'), 'before autoresearch\n')
   assert.equal(fs.readFileSync(path.join(noiseDir, 'keep-me.txt'), 'utf8'), 'unrelated user work\n')
@@ -838,7 +1086,7 @@ test('a newly created file is learned before write and removed on discard', asyn
   assert.equal(protectedResult.ok, true)
   fs.mkdirSync(path.join(cwd, 'src'), { recursive: true })
   fs.writeFileSync(path.join(cwd, 'src', 'generated.ts'), 'export const candidate = true\n')
-  const discarded = await controller.logExperiment({ metric: 9, status: 'discard', description: 'generated helper was slower' })
+  const discarded = await controller.logExperiment({ metric: 9, status: 'discard', description: 'generated helper was slower', next_action: 'continue', decision_reason: 'Try the next safe hypothesis.' })
   assert.equal(discarded.ok, true)
   assert.equal(fs.existsSync(path.join(cwd, 'src', 'generated.ts')), false)
   await controller.close()
@@ -858,7 +1106,7 @@ test('pre-existing dirty work switches to snapshots without committing or changi
   assert.equal(git(cwd, 'diff', '--cached', '--name-only'), beforeIndex)
   await controller.initExperiment({ name: 'dirty safety', metric_name: 'score' })
   fs.writeFileSync(path.join(cwd, 'target.txt'), 'bad candidate\n')
-  const discarded = await controller.logExperiment({ metric: 99, status: 'discard', description: 'worse' })
+  const discarded = await controller.logExperiment({ metric: 99, status: 'discard', description: 'worse', next_action: 'continue', decision_reason: 'Try the next safe hypothesis.' })
   assert.equal(discarded.ok, true)
   assert.equal(fs.readFileSync(path.join(cwd, 'target.txt'), 'utf8'), 'user work before autoresearch\n')
   assert.equal(git(cwd, 'diff', '--cached', '--name-only'), beforeIndex)
@@ -927,6 +1175,8 @@ test('off then an explicit new goal starts a fresh segment instead of resuming t
     status: 'keep',
     description: 'old baseline',
     asi: { hypothesis: 'old goal' },
+    next_action: 'continue',
+    decision_reason: 'Establish the first goal baseline.',
   })
   const oldSnapshot = controller.snapshot()
   assert.equal(oldSnapshot.currentSegmentRuns, 1)
@@ -955,6 +1205,8 @@ test('off then an explicit new goal starts a fresh segment instead of resuming t
     status: 'keep',
     description: 'new baseline',
     asi: { hypothesis: 'new goal' },
+    next_action: 'continue',
+    decision_reason: 'Establish the new goal baseline.',
   })
   const current = await controller.status()
   assert.equal(current.currentSegmentRuns, 1)
@@ -990,6 +1242,8 @@ test('controller runs, logs, commits, schedules continuation, and stops at max i
     status: 'keep',
     description: 'baseline',
     asi: { hypothesis: 'establish baseline' },
+    next_action: 'continue',
+    decision_reason: 'One more experiment remains.',
   })
   assert.equal(firstLog.ok, true)
   assert.equal(firstLog.resume.shouldSchedule, true)
@@ -1010,6 +1264,8 @@ test('controller runs, logs, commits, schedules continuation, and stops at max i
     status: 'keep',
     description: 'improve score',
     asi: { hypothesis: 'smaller is faster' },
+    next_action: 'continue',
+    decision_reason: 'The configured round limit decides the stop.',
   })
   assert.equal(secondLog.ok, true)
   assert.equal(secondLog.resume.shouldSchedule, false)
@@ -1018,6 +1274,145 @@ test('controller runs, logs, commits, schedules continuation, and stops at max i
   assert.equal(status.active, false)
   assert.equal(status.currentSegmentRuns, 2)
   assert.equal(status.bestKeptMetric, 9)
+  await controller.close()
+})
+
+test('a completed run closes the loop atomically instead of leaving active true', async () => {
+  const cwd = createGitFixture()
+  const controller = new AutoresearchController({ cwd, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-complete-state-')) })
+  await controller.control({ args: 'reach a verified target' })
+  await controller.initExperiment({ name: 'completion', metric_name: 'score', direction: 'higher' })
+
+  const missingDecision = await controller.logExperiment({
+    metric: 100,
+    status: 'keep',
+    description: 'unstructured completion attempt',
+    asi: { hypothesis: 'this must not enter the ledger' },
+  })
+  assert.equal(missingDecision.ok, false)
+  assert.match(missingDecision.text, /next_action/)
+  assert.equal(controller.snapshot().currentSegmentRuns, 0)
+
+  const logged = await controller.logExperiment({
+    metric: 100,
+    status: 'keep',
+    description: 'verified target reached',
+    asi: { hypothesis: 'the explicit target is satisfied' },
+    next_action: 'complete',
+    decision_reason: 'Target and guardrails are verified.',
+  })
+  const snapshot = controller.snapshot() as unknown as {
+    active: boolean
+    loopState: string
+    completionReason: string | null
+    completedAt: number | null
+    pendingContinuation: boolean
+  }
+
+  assert.equal(logged.ok, true)
+  assert.equal(logged.resume?.shouldSchedule, false)
+  assert.equal(snapshot.active, false)
+  assert.equal(snapshot.loopState, 'completed')
+  assert.equal(snapshot.completionReason, 'Target and guardrails are verified.')
+  assert.ok(Number.isFinite(snapshot.completedAt))
+  assert.equal(snapshot.pendingContinuation, false)
+  assert.equal((await controller.status()).active, false)
+  await controller.close()
+})
+
+test('later verification can finish a pending continuation without another experiment', async () => {
+  const cwd = createGitFixture()
+  const controller = new AutoresearchController({ cwd, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-late-finish-')) })
+  await controller.control({ args: 'verify and finish a target' })
+  await controller.initExperiment({ name: 'late-finish', metric_name: 'score', direction: 'higher' })
+  const logged = await controller.logExperiment({
+    metric: 95,
+    status: 'keep',
+    description: 'candidate requires a later review',
+    asi: { hypothesis: 'read-only verification will decide completion' },
+    next_action: 'continue',
+    decision_reason: 'Perform one read-only verification before closing.',
+  })
+  assert.equal(logged.resume?.shouldSchedule, true)
+  assert.equal(controller.snapshot().pendingContinuation, true)
+
+  const finished = await controller.finish({
+    outcome: 'complete',
+    reason: 'The later verification confirms the goal and all guardrails.',
+  })
+  const snapshot = controller.snapshot()
+  assert.equal(finished.ok, true)
+  assert.equal(snapshot.active, false)
+  assert.equal(snapshot.loopState, 'completed')
+  assert.equal(snapshot.pendingContinuation, false)
+  assert.throws(() => controller.consumeResumeToken(logged.resume?.token))
+  await controller.close()
+})
+
+test('legacy active state migrates in place and can complete without text heuristics', async () => {
+  const cwd = createGitFixture()
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-legacy-state-'))
+  fs.mkdirSync(path.join(cwd, '.auto'), { recursive: true })
+  fs.writeFileSync(path.join(cwd, '.auto', 'prompt.md'), '# Existing goal\n')
+  fs.writeFileSync(path.join(cwd, '.auto', 'log.jsonl'), [
+    JSON.stringify({ type: 'config', name: 'legacy-goal', metricName: 'score', bestDirection: 'higher' }),
+    JSON.stringify({ run: 1, metric: 97, status: 'keep', description: 'verified result', segment: 0 }),
+  ].join('\n'))
+  const controller = new AutoresearchController({ cwd, dataDir })
+  fs.writeFileSync(controller.statePath(), JSON.stringify({
+    version: 1,
+    cwd,
+    workDir: cwd,
+    active: true,
+    manualOff: false,
+    sessionEpoch: 1,
+    pendingResumeToken: null,
+  }))
+
+  assert.equal(controller.privateState().loopState, 'active')
+  const finished = await controller.finish({ outcome: 'complete', reason: 'Legacy evidence is verified.' })
+  assert.equal(finished.ok, true)
+  assert.equal(controller.privateState().version, 3)
+  assert.equal(controller.snapshot().loopState, 'completed')
+  await controller.close()
+})
+
+test('needs_user pauses automatic work in a durable decision state', async () => {
+  const cwd = createGitFixture()
+  const controller = new AutoresearchController({ cwd, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-decision-state-')) })
+  await controller.control({ args: 'optimize without trading quality' })
+  await controller.initExperiment({ name: 'decision', metric_name: 'score', direction: 'higher' })
+
+  const logged = await controller.logExperiment({
+    metric: 90,
+    status: 'keep',
+    description: 'safe gains are exhausted',
+    asi: { hypothesis: 'the next path changes quality' },
+    next_action: 'needs_user',
+    decision_reason: 'Further gains require a quality tradeoff.',
+    user_question: '是否允许降低画质来继续提升帧率？',
+  })
+  const waiting = controller.snapshot() as unknown as {
+    active: boolean
+    loopState: string
+    decisionQuestion: string | null
+    pendingContinuation: boolean
+  }
+
+  assert.equal(logged.ok, true)
+  assert.equal(logged.resume?.shouldSchedule, false)
+  assert.equal(logged.needsDecision, true)
+  assert.equal(waiting.active, false)
+  assert.equal(waiting.loopState, 'awaiting_user')
+  assert.equal(waiting.decisionQuestion, '是否允许降低画质来继续提升帧率？')
+  assert.equal(waiting.pendingContinuation, false)
+
+  const resumed = await controller.control({ args: 'resume' })
+  const active = controller.snapshot() as unknown as { active: boolean; loopState: string; decisionQuestion: string | null }
+  assert.equal(resumed.active, true)
+  assert.equal(active.active, true)
+  assert.equal(active.loopState, 'active')
+  assert.equal(active.decisionQuestion, null)
   await controller.close()
 })
 
@@ -1036,6 +1431,8 @@ test('discard restores worktree changes while preserving autoresearch artifacts'
     status: 'discard',
     description: 'bad change',
     asi: { hypothesis: 'bad', rollback_reason: 'worse' },
+    next_action: 'continue',
+    decision_reason: 'Try the next safe hypothesis.',
   })
   assert.equal(logged.ok, true)
   assert.equal(fs.readFileSync(path.join(cwd, 'target.txt'), 'utf8'), 'user work before autoresearch\n')
@@ -1059,6 +1456,8 @@ test('failed correctness checks cannot be kept and are reverted when logged', as
     status: 'keep',
     description: 'invalid candidate',
     asi: { hypothesis: 'break the invariant' },
+    next_action: 'continue',
+    decision_reason: 'This should be rejected by checks.',
   })
   assert.equal(rejectedKeep.ok, false)
   assert.match(rejectedKeep.text, /cannot keep/i)
@@ -1067,6 +1466,8 @@ test('failed correctness checks cannot be kept and are reverted when logged', as
     status: 'checks_failed',
     description: 'invalid candidate',
     asi: { hypothesis: 'break the invariant', rollback_reason: 'checks failed' },
+    next_action: 'continue',
+    decision_reason: 'Try the next safe hypothesis.',
   })
   assert.equal(logged.ok, true)
   assert.equal(fs.readFileSync(path.join(cwd, 'target.txt'), 'utf8'), 'baseline\n')
@@ -1119,6 +1520,8 @@ test('workingDir keeps config at the workspace root and experiment artifacts in 
     status: 'keep',
     description: 'scoped change',
     asi: { hypothesis: 'workingDir is isolated' },
+    next_action: 'continue',
+    decision_reason: 'Continue the isolated workflow.',
   })
   assert.equal(kept.ok, true)
   assert.equal(fs.existsSync(path.join(workDir, '.auto', 'log.jsonl')), true)
@@ -1141,6 +1544,8 @@ test('same-session resume tokens are one-shot and manual off cancels pending wor
     status: 'keep',
     description: 'baseline',
     asi: { hypothesis: 'baseline' },
+    next_action: 'continue',
+    decision_reason: 'Schedule the next experiment.',
   })
   const pendingStatus = await controller.status()
   assert.equal(pendingStatus.pendingContinuation, true)
@@ -1159,6 +1564,8 @@ test('same-session resume tokens are one-shot and manual off cancels pending wor
     status: 'keep',
     description: 'repeat',
     asi: { hypothesis: 'repeat' },
+    next_action: 'continue',
+    decision_reason: 'Schedule another experiment.',
   })
   assert.equal(second.resume.shouldSchedule, true)
   await controller.control({ args: 'off' })
@@ -1234,12 +1641,13 @@ test('snapshot does not activate the loop', async () => {
 
 test('host plugin source is a named apply without a default export', () => {
   const source = fs.readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  assert.match(source, /export function apply/)
+  assert.match(source, /export (?:async )?function apply/)
   assert.match(source, /\[dsh-autoresearch\] loaded/)
   assert.equal(/export\s+default\s+/.test(source), false)
   assert.equal(/append\?\.\(\['"]autoresearch\//.test(source), false)
   assert.match(source, /toJsonValue/)
-  assert.match(source, /appendSnapshot\(invocation\.agent\.session, result\)/)
+  assert.equal(source.includes("append('autoresearch/state'"), false)
+  assert.match(source, /migrateLegacyAutoresearchSessions/)
 })
 
 test('tool payloads drop undefined keys so harness JSON snapshotting succeeds', () => {

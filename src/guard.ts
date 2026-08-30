@@ -14,10 +14,11 @@ export interface GuardDecision {
 
 const CONTROL_OK = /(?:^|_)autoresearch_control$/
 const READ_OK = /(?:^|_)autoresearch_(?:status|compaction_summary)$/
+const FINISH_OK = /(?:^|_)autoresearch_finish$/
 
 function controlArgsAllowWhilePending(args: Record<string, unknown> | undefined): boolean {
   const raw = String(args?.args ?? '').trim().toLowerCase()
-  return raw === '' || /^(help|status|off|clear|export|finalize|hooks)\b/.test(raw)
+  return raw === '' || /^(help|status|off|complete|clear|export|finalize|hooks)\b/.test(raw)
 }
 
 export function evaluatePendingGuard(input: GuardInput): GuardDecision {
@@ -30,6 +31,7 @@ export function evaluatePendingGuard(input: GuardInput): GuardDecision {
     return { decision: 'allow' }
   }
   if (READ_OK.test(toolName)) return { decision: 'allow' }
+  if (FINISH_OK.test(toolName)) return { decision: 'allow' }
   return {
     decision: 'deny',
     reason:

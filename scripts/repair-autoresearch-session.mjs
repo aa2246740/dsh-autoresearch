@@ -4,7 +4,10 @@ import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
-import { repairAutoresearchSessionJsonl } from '../lib/types/recovery.js'
+import {
+  markAutoresearchStateEventsIgnorable,
+  repairAutoresearchSessionJsonl,
+} from '../lib/types/recovery.js'
 
 function fail(message) {
   process.stderr.write(`${message}\n`)
@@ -34,7 +37,8 @@ if (!inputPath) {
   const compressed = inputPath.endsWith('.zstd')
   const inputBytes = readFileSync(inputPath)
   const raw = compressed ? zstd(['-dc', '--', inputPath]).toString('utf8') : inputBytes.toString('utf8')
-  const result = repairAutoresearchSessionJsonl(raw)
+  const stateMigration = markAutoresearchStateEventsIgnorable(raw)
+  const result = repairAutoresearchSessionJsonl(stateMigration.jsonl)
   let candidateBytes
   if (compressed) {
     const firstNewline = result.jsonl.indexOf('\n')
@@ -58,6 +62,7 @@ if (!inputPath) {
     ok: true,
     sessionId: result.sessionId,
     repairs: result.repairs,
+    stateEventsMarkedIgnorable: stateMigration.markedEventSeqs,
     inputSha256: createHash('sha256').update(inputBytes).digest('hex'),
     candidateSha256: createHash('sha256').update(candidateBytes).digest('hex'),
     output: outputPath ?? null,

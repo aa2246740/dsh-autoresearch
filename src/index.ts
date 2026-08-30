@@ -12,13 +12,19 @@ import z from '@deepseek-ai/schemastery'
 import { AutoresearchController } from './controller.js'
 import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from './compaction.js'
 import { evaluatePendingGuard } from './guard.js'
+import { migrateLegacyAutoresearchSessions, type SessionPersistenceLike } from './legacy-session-migration.js'
 import { CONTINUE_PLAYBOOK, CREATE_PLAYBOOK, skillBodies } from './playbook.js'
 import { ensureParentDir, sessionFilePath } from './paths.js'
-import { autoresearchProjectionSchema, foldAutoresearchProjection } from './projection.js'
-import { toJsonValue, type AutoresearchSnapshot, type ToolResult } from './types.js'
+import {
+  autoresearchProjectionSchema,
+  autoresearchProjectionStateSchema,
+  foldAutoresearchProjection,
+  initialAutoresearchProjectionState,
+} from './projection.js'
+import { toJsonValue, type AutoresearchProjectionState, type AutoresearchSnapshot, type ToolResult } from './types.js'
 
 export const name = 'dsh-autoresearch'
-export const inject = ['tools']
+export const inject = ['tools', 'sessionPersistence']
 export const NS = settingsNamespace('autoresearch')
 
 export interface Config {
@@ -39,7 +45,6 @@ const controllers = new Map<string, AutoresearchController>()
 type SessionLike = {
   header?: { cwd?: string }
   events?: readonly unknown[]
-  append?: (type: string, data: unknown) => void
 }
 
 type FollowupAgent = {
@@ -179,15 +184,10 @@ function playbookFor(result: ToolResult): string {
   return goal ? `${CREATE_PLAYBOOK}\n\nCurrent explicit goal: ${goal}` : CREATE_PLAYBOOK
 }
 
-function appendSnapshot(session: SessionLike | undefined, result: ToolResult): void {
-  if (!result.snapshot || typeof session?.append !== 'function') return
-  session.append('autoresearch/state', { snapshot: result.snapshot })
-}
-
 function isActivating(args: string): boolean {
   const command = args.trim().toLowerCase()
   if (!command) return false
-  if (/^(help|status|off|clear|export|finalize|hooks)\b/.test(command)) return false
+  if (/^(help|status|off|complete|clear|export|finalize|hooks)\b/.test(command)) return false
   return true
 }
 
@@ -198,7 +198,13 @@ function enableAllowNoGit(controller: AutoresearchController, raw: string): void
   writeFileSync(configPath, `${JSON.stringify({ ...controller.config(), allowNoGit: true }, null, 2)}\n`)
 }
 
-export function apply(ctx: Context, config: Config): void {
+export async function apply(ctx: Context, config: Config): Promise<void> {
+  const migration = await migrateLegacyAutoresearchSessions(
+    (ctx as Context & { sessionPersistence: SessionPersistenceLike }).sessionPersistence,
+  )
+  if (migration.failures.length > 0) {
+    ctx.logger.warn('[dsh-autoresearch] legacy session migration deferred', migration.failures)
+  }
   console.log(MARKER)
 
   let source = () => config
@@ -308,7 +314,7 @@ export function apply(ctx: Context, config: Config): void {
 
   tool({
     name: 'autoresearch_log_experiment',
-    description: 'Durably record one actual experiment. keep commits; discard/crash/checks_failed revert while preserving .auto. If resume.shouldSchedule is true, end the turn; the host follows up the same session.',
+    description: 'Durably record one actual experiment and atomically decide whether to continue, complete, or wait for the user. keep commits; discard/crash/checks_failed revert while preserving .auto.',
     parameters: {
       commit: { type: 'string', description: 'Optional short commit hash' },
       metric: { type: 'number', required: true, description: 'Primary metric value' },
@@ -317,6 +323,9 @@ export function apply(ctx: Context, config: Config): void {
       description: { type: 'string', required: true, description: 'What changed in this run' },
       asi: { type: 'json', required: true, description: 'Hypothesis and notes for the next iteration' },
       force: { type: 'boolean', description: 'Allow adding new secondary metrics' },
+      next_action: { type: 'string', required: true, enum: ['continue', 'complete', 'needs_user'], description: 'The durable next lifecycle decision for this loop' },
+      decision_reason: { type: 'string', required: true, description: 'Evidence-based reason for the next lifecycle decision' },
+      user_question: { type: 'string', description: 'Required when next_action is needs_user; ask this exact decision question' },
     },
     output: toolOutput(),
     async execute(args: Record<string, unknown>, exec: {
@@ -333,6 +342,21 @@ export function apply(ctx: Context, config: Config): void {
         }
       }
       return result
+    },
+  })
+
+  tool({
+    name: 'autoresearch_finish',
+    description: 'Close an active autoresearch loop after later verification, or pause it for an explicit user decision. Use this before claiming completion when no new experiment is being logged.',
+    parameters: {
+      outcome: { type: 'string', required: true, enum: ['complete', 'needs_user'] },
+      reason: { type: 'string', required: true, description: 'Evidence-based completion or decision reason' },
+      user_question: { type: 'string', description: 'Required when outcome is needs_user' },
+    },
+    output: toolOutput(),
+    async execute(args: { outcome: string; reason: string; user_question?: string }, exec: { agent?: FollowupAgent }) {
+      const controller = controllerFor(workspaceOf(exec.agent))
+      return withSnapshot(controller, await controller.finish(args))
     },
   })
 
@@ -362,7 +386,6 @@ export function apply(ctx: Context, config: Config): void {
           args: raw,
           protectedPaths: protectedPathsFromSession(invocation.agent.session, cwd),
         }))
-        appendSnapshot(invocation.agent.session, result)
         if (result.ok && result.active && isActivating(raw)) {
           queueAutoresearchFollowup(invocation.agent, playbookFor(result))
         }
@@ -378,6 +401,14 @@ export function apply(ctx: Context, config: Config): void {
       text: (assemble: { agent?: { session?: { header?: { cwd?: string } } } }) => {
         const cwd = workspaceOf(assemble.agent)
         const state = controllerFor(cwd).privateState()
+        if (state.loopState === 'awaiting_user') {
+          return [
+            'Autoresearch is paused for an explicit user decision.',
+            `Question: ${state.decisionQuestion ?? 'Ask the user whether to continue or complete.'}`,
+            `Reason: ${state.completionReason ?? 'Further progress requires user judgment.'}`,
+            'Use the host decision-question UI. If the user chooses to continue, run /autoresearch resume. If the user chooses to stop, call autoresearch_finish with outcome=complete before the final answer.',
+          ].join('\n')
+        }
         if (state.active !== true || state.manualOff === true) return ''
         return state.pendingNewGoal && state.goal
           ? `${CREATE_PLAYBOOK}\n\nCurrent explicit goal: ${state.goal}`
@@ -418,16 +449,18 @@ export function apply(ctx: Context, config: Config): void {
   ctx.inject(['sessionProjections'], (projectionCtx: Context) => {
     projectionCtx.sessionProjections.register({
       key: 'autoresearch',
-      stateSchema: autoresearchProjectionSchema,
-      init: () => null,
-      apply: (state: AutoresearchSnapshot | null, event: { type: string; data: unknown }) => {
+      stateSchema: autoresearchProjectionStateSchema,
+      init: initialAutoresearchProjectionState,
+      apply: (state: AutoresearchProjectionState, event: { type: string; time?: number; data: unknown }) => {
         return foldAutoresearchProjection(state, event)
       },
       wire: {
         viewSchema: autoresearchProjectionSchema,
-        view: (state: AutoresearchSnapshot | null) => state,
+        view: (state: AutoresearchProjectionState) => state.snapshot
+          ? { ...state.snapshot, boardReady: state.boardReady }
+          : null,
       },
-      stateVersion: 4,
+      stateVersion: 6,
     })
   })
 }

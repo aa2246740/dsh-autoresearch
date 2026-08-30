@@ -2,6 +2,8 @@ import type { ExperimentRun, ExperimentStatus, MetricDirection, PersistedState }
 
 export type { ExperimentRun, ExperimentStatus, MetricDirection, PersistedState, AsiNotes } from './jsonl.js'
 
+export type AutoresearchLoopState = 'idle' | 'active' | 'awaiting_user' | 'completed' | 'stopped' | 'blocked'
+
 export interface AutoresearchConfig {
   workingDir?: string
   maxIterations?: number | null
@@ -29,6 +31,11 @@ export interface PrivateState {
   pendingNewGoal: boolean
   active: boolean
   manualOff: boolean
+  /** Durable lifecycle truth. `active` remains for backward compatibility. */
+  loopState: AutoresearchLoopState
+  completionReason: string | null
+  completedAt: number | null
+  decisionQuestion: string | null
   autoResumeTurns: number
   pendingResumeToken: string | null
   hintsThisSession: number
@@ -60,6 +67,10 @@ export interface ToolResult {
   configNotes?: string[]
   pendingContinuation?: boolean
   manualOff?: boolean
+  loopState?: AutoresearchLoopState
+  completionReason?: string | null
+  completedAt?: number | null
+  decisionQuestion?: string | null
   pendingNewGoal?: boolean
   sessionEpoch?: number
   currentSegmentRuns?: number
@@ -77,6 +88,10 @@ export interface AutoresearchSnapshot {
   workDir: string
   active: boolean
   manualOff: boolean
+  loopState: AutoresearchLoopState
+  completionReason: string | null
+  completedAt: number | null
+  decisionQuestion: string | null
   pendingNewGoal: boolean
   needsSetup: boolean
   pendingContinuation: boolean
@@ -104,6 +119,14 @@ export interface AutoresearchSnapshot {
   measureExists: boolean
   checksExists: boolean
   updatedAt: number
+  /** Projection-only evidence that this session logged at least one real experiment. */
+  boardReady?: boolean
+}
+
+export interface AutoresearchProjectionState {
+  snapshot: AutoresearchSnapshot | null
+  pendingCommands: Record<string, string>
+  boardReady: boolean
 }
 
 export const STATE_MARKER = 'AUTORESEARCH_STATE_V1'

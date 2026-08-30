@@ -18,6 +18,7 @@ import {
 import { preferLedgerSnapshot, snapshotFromMeta } from '../projection.js'
 import {
   applyCommandText,
+  applyCommandAcknowledgement,
   buildStartLine,
   cancelInitDock,
   dismissProgress,
@@ -27,6 +28,7 @@ import {
   parseRoundBudget,
   patchLab,
   progressIdentity,
+  recordCommandAcknowledgement,
   rememberSession,
   showInitDock,
   startDecisionMessage,
@@ -59,6 +61,7 @@ type AnyCtx = ClientContext & {
   }
   settingsScope: { bind: (opts: { namespace: string }) => SettingsScope }
   commandUi: CommandUiContract
+  on: (event: string, listener: (...args: any[]) => unknown) => unknown
 }
 
 interface RemoteAnswer {
@@ -157,8 +160,12 @@ const clientStyles = `
     background: var(--dsw-alias-button-ghost-active-fill, ${colors.subtle});
   }
   .dsh-ar-trigger[data-state='running'],
-  .dsh-ar-trigger[data-state='waiting'] { color: ${colors.accent}; }
-  .dsh-ar-trigger[data-state='ended'] { color: ${colors.good}; }
+  .dsh-ar-trigger[data-state='ready'] { color: ${colors.accent}; }
+  .dsh-ar-trigger[data-state='waiting'],
+  .dsh-ar-trigger[data-state='awaiting-user'] { color: ${colors.warn}; }
+  .dsh-ar-trigger[data-state='completed'] { color: ${colors.good}; }
+  .dsh-ar-trigger[data-state='stopped'],
+  .dsh-ar-trigger[data-state='ended'] { color: ${colors.muted}; }
   .dsh-ar-trigger::after {
     content: '';
     position: absolute;
@@ -171,8 +178,12 @@ const clientStyles = `
     background: ${colors.muted};
   }
   .dsh-ar-trigger[data-state='running']::after { background: ${colors.accent}; }
+  .dsh-ar-trigger[data-state='ready']::after { background: ${colors.accent}; }
   .dsh-ar-trigger[data-state='waiting']::after { background: ${colors.warn}; }
-  .dsh-ar-trigger[data-state='ended']::after { background: ${colors.good}; }
+  .dsh-ar-trigger[data-state='awaiting-user']::after { background: ${colors.warn}; }
+  .dsh-ar-trigger[data-state='completed']::after { background: ${colors.good}; }
+  .dsh-ar-trigger[data-state='stopped']::after,
+  .dsh-ar-trigger[data-state='ended']::after { background: ${colors.muted}; }
   .dsh-ar-menu {
     position: fixed;
     z-index: 1100;
@@ -445,8 +456,25 @@ function ProgressCard({
   const lab = useLab()
   const progressDelta = formatDeltaPct(model.progress?.deltaPct ?? null)
   const deltaTone = model.progress?.improved === true ? colors.good : model.progress?.improved === false ? colors.bad : colors.muted
-  const ended = model.lifecycle === 'ended'
-  const stateTone = ended ? colors.good : colors.accent
+  const terminal = model.lifecycle !== 'running' && model.lifecycle !== 'awaiting_user'
+  const stateTone = model.lifecycle === 'completed'
+    ? colors.good
+    : model.lifecycle === 'awaiting_user'
+      ? colors.warn
+      : terminal
+        ? colors.muted
+        : colors.accent
+  const stateLabel = model.lifecycle === 'completed'
+    ? '目标已完成'
+    : model.lifecycle === 'awaiting_user'
+      ? '等待你拍板'
+      : model.lifecycle === 'stopped'
+        ? '本轮已停止'
+        : model.lifecycle === 'ended'
+          ? '本轮已结束'
+          : model.running
+            ? '正在执行'
+            : '循环已开启'
 
   async function onPause(): Promise<void> {
     if (!sessionId || lab.busy) return
@@ -488,9 +516,28 @@ function ProgressCard({
           }}
         >
           <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: '50%', background: stateTone }} />
-          {ended ? '本轮已结束' : '正在优化'}
+          {stateLabel}
         </div>
       </header>
+
+      {model.lifecycle === 'awaiting_user' ? (
+        <div
+          role="status"
+          data-autoresearch="decision-required"
+          style={{
+            display: 'grid',
+            gap: 5,
+            padding: '12px 14px',
+            border: `1px solid color-mix(in srgb, ${colors.warn} 45%, transparent)`,
+            borderRadius: 8,
+            background: `color-mix(in srgb, ${colors.warn} 8%, ${colors.panel})`,
+          }}
+        >
+          <strong style={{ color: colors.warn }}>等待你拍板</strong>
+          <span>{snapshot.decisionQuestion ?? '下一步需要你的决定，请在对话中的确认卡选择。'}</span>
+          {snapshot.completionReason ? <span style={{ color: colors.muted, fontSize: 12 }}>{snapshot.completionReason}</span> : null}
+        </div>
+      ) : null}
 
       <div
         className="dsh-ar-outcome"
@@ -582,7 +629,9 @@ function ProgressCard({
       ) : null}
       {lab.error ? <div role="alert" style={{ color: colors.bad, fontSize: 12, whiteSpace: 'pre-wrap' }}>{lab.error}</div> : null}
       <div data-ud-check="progress-action" data-ud-role="panel" style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        {ended ? (
+        {model.lifecycle === 'awaiting_user' ? (
+          <span style={{ color: colors.muted, fontSize: 12 }}>请在对话中的确认卡拍板</span>
+        ) : terminal ? (
           <LabButton kind="primary" onClick={() => dismissProgress(snapshot)}>关闭结果</LabButton>
         ) : (
           <LabButton disabled={!sessionId || lab.busy} onClick={() => void onPause()}>
@@ -600,9 +649,13 @@ function AutoresearchHeaderUtility({ ctx, sessionId, useSession, useProjection, 
   const live = useSession ? useSession((snapshot) => snapshot) : session
   const projected = snapshotFromMeta(typeof useProjection === 'function' ? useProjection('autoresearch') : undefined)
   const progress = inspectConversation(live ?? { runningCalls: [], nodes: [] })
-  const snapshot = progress.kind === 'board'
+  const projectedBoard = Boolean(projected?.boardReady && projected.results.length > 0)
+  const baseSnapshot = progress.kind === 'board'
     ? preferLedgerSnapshot(progress.snapshot, projected) ?? progress.snapshot
-    : progress.snapshot
+    : projectedBoard
+      ? projected
+      : progress.snapshot
+  const snapshot = applyCommandAcknowledgement(baseSnapshot, lab.commandAck, sessionId)
   const model = snapshot ? buildDashboardModel(snapshot, {
     running: progress.runningExperiment,
     runningCommand: progress.runningCommand,
@@ -613,7 +666,9 @@ function AutoresearchHeaderUtility({ ctx, sessionId, useSession, useProjection, 
     && snapshot
     && progressIdentity(snapshot) === lab.supersededProgressKey,
   )
-  const showBoard = !superseded && progress.kind === 'board' && snapshot !== null && model !== null && model.runs > 0
+  const acknowledgedBoard = lab.commandAck?.sessionId === sessionId && lab.commandAck.kind !== 'idle'
+  const showBoard = !superseded && (progress.kind === 'board' || projectedBoard || acknowledgedBoard)
+    && snapshot !== null && model !== null && model.runs > 0
   const showRunning = !showBoard && !superseded && progress.kind === 'running'
   const showWaiting = !showBoard && !showRunning && (
     lab.dock === 'waiting'
@@ -664,16 +719,32 @@ function AutoresearchHeaderUtility({ ctx, sessionId, useSession, useProjection, 
 
   if (!visible) return null
 
-  const monitorState = showBoard && model?.lifecycle === 'ended'
-    ? 'ended'
-    : showWaiting
-      ? 'waiting'
-      : 'running'
-  const stateLabel = monitorState === 'ended'
-    ? '本轮已结束'
-    : monitorState === 'waiting'
-      ? '正在准备新目标'
-      : '正在优化'
+  const monitorState = showBoard && model?.lifecycle === 'completed'
+    ? 'completed'
+    : showBoard && model?.lifecycle === 'awaiting_user'
+      ? 'awaiting-user'
+      : showBoard && model?.lifecycle === 'stopped'
+        ? 'stopped'
+        : showBoard && model?.lifecycle === 'ended'
+          ? 'ended'
+          : showRunning || progress.runningExperiment
+            ? 'running'
+            : showWaiting || snapshot?.pendingContinuation
+              ? 'waiting'
+              : 'ready'
+  const stateLabel = monitorState === 'completed'
+    ? '目标已完成'
+    : monitorState === 'awaiting-user'
+      ? '等待你拍板'
+      : monitorState === 'stopped'
+        ? '本轮已停止'
+        : monitorState === 'ended'
+          ? '本轮已结束'
+          : monitorState === 'running'
+            ? '正在执行实验'
+            : monitorState === 'waiting'
+              ? '正在准备下一轮'
+              : '循环已开启'
   const goalLabel = model?.name ?? projected?.name ?? snapshot?.name ?? null
 
   return (
@@ -728,7 +799,9 @@ function AutoresearchDock({ ctx, sessionId, useSession, useProjection, session }
   const progress = inspectConversation(live ?? { runningCalls: [], nodes: [] })
   const snapshot = progress.kind === 'board'
     ? preferLedgerSnapshot(progress.snapshot, projected) ?? progress.snapshot
-    : progress.snapshot
+    : projected?.boardReady && projected.results.length > 0
+      ? projected
+      : progress.snapshot
   if (lab.dock === 'init') {
     return (
       <div data-autoresearch="dock" style={dockShell}>
@@ -779,6 +852,11 @@ function SettingsCard({ scope }: { scope: SettingsScope }) {
 }
 
 export function apply(ctx: AnyCtx): void {
+  ctx.on('command/executed', (sessionId: string, commandName: string, result: { kind?: string; text?: string }) => {
+    if (commandName !== 'autoresearch' || result.kind !== 'success' || typeof result.text !== 'string') return
+    recordCommandAcknowledgement(sessionId, result.text)
+  })
+
   ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
     name: 'conversation.session.header.utilities',
     id: 'autoresearch-monitor',

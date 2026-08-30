@@ -3,6 +3,14 @@ import { parseEmbeddedState, type AutoresearchSnapshot } from '../types.js'
 export type DockMode = 'hidden' | 'init' | 'waiting'
 export type LabPage = 'create' | 'lab'
 export type LabPhase = 'idle' | 'configuring' | 'running' | 'done'
+export type CommandLifecycleKind = 'completed' | 'stopped' | 'idle'
+
+export interface CommandLifecycleAck {
+  sessionId: string
+  kind: CommandLifecycleKind
+  reason: string | null
+  at: number
+}
 
 /** Init card fields only. Metric / direction / measure.sh are inferred after confirm. */
 export interface ExperimentDraft {
@@ -29,6 +37,8 @@ export interface LabState {
   dismissedProgressKey: string | null
   /** Previous rendered result hidden while an explicit new goal is preparing. */
   supersededProgressKey: string | null
+  /** Immediate authoritative acknowledgement from this browser's slash command. */
+  commandAck: CommandLifecycleAck | null
 }
 
 const initial: LabState = {
@@ -43,6 +53,7 @@ const initial: LabState = {
   notice: null,
   dismissedProgressKey: null,
   supersededProgressKey: null,
+  commandAck: null,
 }
 
 let state = initial
@@ -81,6 +92,7 @@ export function showInitDock(): void {
     error: null,
     busy: false,
     supersededProgressKey: null,
+    commandAck: null,
   })
 }
 
@@ -107,7 +119,54 @@ export function cancelInitDock(): void {
 
 export function rememberSession(sessionId: string): void {
   if (state.sessionId === sessionId) return
-  patchLab({ sessionId, dismissedProgressKey: null, supersededProgressKey: null })
+  patchLab({ sessionId, dismissedProgressKey: null, supersededProgressKey: null, commandAck: null })
+}
+
+/**
+ * The client command service emits this exact Host result after a local slash
+ * submission settles. It bridges the short gap before a cold read/projection
+ * refresh; durable truth remains in command/done and the controller sidecar.
+ */
+export function recordCommandAcknowledgement(sessionId: string, text: string): void {
+  const completed = /^Autoresearch completed:\s*(.*)$/s.exec(text)
+  if (completed) {
+    patchLab({ commandAck: {
+      sessionId,
+      kind: 'completed',
+      reason: completed[1]?.trim() || 'The verified goal is complete.',
+      at: Date.now(),
+    } })
+    return
+  }
+  if (text === 'Autoresearch is off. Any pending automatic continuation was cancelled.') {
+    patchLab({ commandAck: { sessionId, kind: 'stopped', reason: 'Stopped by the user.', at: Date.now() } })
+    return
+  }
+  if (text === 'Autoresearch log cleared and automatic continuation stopped.') {
+    patchLab({ commandAck: { sessionId, kind: 'idle', reason: null, at: Date.now() } })
+    return
+  }
+  if (text.startsWith('Autoresearch is active.')) patchLab({ commandAck: null })
+}
+
+export function applyCommandAcknowledgement(
+  snapshot: AutoresearchSnapshot | null,
+  ack: CommandLifecycleAck | null,
+  sessionId: string,
+): AutoresearchSnapshot | null {
+  if (!snapshot || !ack || ack.sessionId !== sessionId) return snapshot
+  if (ack.kind === 'idle') return null
+  return {
+    ...snapshot,
+    active: false,
+    manualOff: ack.kind === 'stopped',
+    loopState: ack.kind,
+    completionReason: ack.reason,
+    completedAt: ack.kind === 'completed' ? ack.at : null,
+    decisionQuestion: null,
+    pendingContinuation: false,
+    updatedAt: Math.max(snapshot.updatedAt, ack.at),
+  }
 }
 
 export function progressIdentity(snapshot: AutoresearchSnapshot): string {

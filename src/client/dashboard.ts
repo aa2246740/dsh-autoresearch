@@ -34,7 +34,7 @@ export interface DashboardModel {
   rows: DashboardRow[]
   running: boolean
   runningCommand: string | null
-  lifecycle: 'running' | 'ended'
+  lifecycle: 'running' | 'completed' | 'awaiting_user' | 'stopped' | 'ended'
 }
 
 export interface ConversationInspectInput {
@@ -218,7 +218,15 @@ export function buildDashboardModel(
     rows,
     running: opts.running === true,
     runningCommand: opts.runningCommand ?? null,
-    lifecycle: snapshot.active ? 'running' : 'ended',
+    lifecycle: snapshot.loopState === 'completed'
+      ? 'completed'
+      : snapshot.loopState === 'awaiting_user'
+        ? 'awaiting_user'
+        : snapshot.loopState === 'stopped' || snapshot.loopState === 'blocked'
+          ? 'stopped'
+          : snapshot.active
+            ? 'running'
+            : 'ended',
   }
 }
 
