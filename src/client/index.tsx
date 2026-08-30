@@ -4,7 +4,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-commands/client'
 import type { CommandUiContract } from '@deepseek-ai/dsh-client-ui-commands/client'
-import type { ExperimentStatus } from '../types.js'
+import type { AutoresearchSnapshot, ExperimentStatus } from '../types.js'
 import { parseEmbeddedState } from '../types.js'
 import {
   buildDashboardModel,
@@ -18,10 +18,13 @@ import {
   applyCommandText,
   buildStartLine,
   cancelInitDock,
+  dismissProgress,
   friendlyStartError,
   hideAfterConfirm,
+  isProgressDismissed,
   parseRoundBudget,
   patchLab,
+  progressIdentity,
   rememberSession,
   showInitDock,
   startDecisionMessage,
@@ -76,15 +79,17 @@ interface DockProps {
 }
 
 const colors = {
-  bg: 'var(--dsw-alias-bg-primary, Canvas)',
-  panel: 'var(--dsw-specific-tip, var(--dsw-alias-bg-secondary, Canvas))',
+  bg: 'var(--dsw-alias-bg-layer-1, Canvas)',
+  panel: 'var(--dsw-alias-bg-layer-1, Canvas)',
+  subtle: 'var(--dsw-alias-bg-module-platform, color-mix(in srgb, CanvasText 4%, Canvas))',
   text: 'var(--dsw-alias-label-primary, CanvasText)',
   muted: 'var(--dsw-alias-label-secondary, GrayText)',
   line: 'var(--dsw-alias-border-l1, var(--dsw-alias-border-l2, ButtonBorder))',
   good: 'var(--dsw-alias-text-success, var(--dsw-alias-state-success-primary, #1a7f37))',
   bad: 'var(--dsw-alias-text-danger, var(--dsw-alias-state-error-primary, #cf222e))',
-  accent: 'var(--dsw-alias-text-accent, var(--dsw-alias-state-business-primary, #0969da))',
-  warn: 'var(--dsw-alias-text-warning, #9a6700)',
+  accent: 'var(--dsw-alias-button-primary-fill, var(--dsw-alias-state-business-primary, #2f6fed))',
+  onAccent: 'var(--dsw-alias-label-primary-foreground, #ffffff)',
+  warn: 'var(--dsw-alias-state-warn-label, #9a6700)',
 }
 
 const font: CSSProperties = {
@@ -99,14 +104,46 @@ const dockShell: CSSProperties = {
   maxWidth: 'calc(var(--dsh-composer-card-max-width, 960px) - var(--dsh-composer-dock-inset, 0px) * 2)',
   margin: '0 auto',
   border: `1px solid ${colors.line}`,
-  borderRadius: 12,
+  borderRadius: 14,
   background: colors.panel,
-  padding: '10px 12px',
+  padding: 16,
 }
 
 const mono: CSSProperties = {
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
 }
+
+const tabular: CSSProperties = {
+  fontVariantNumeric: 'tabular-nums',
+  fontFeatureSettings: '"tnum" 1',
+}
+
+const clientStyles = `
+  @keyframes dsh-ar-spin { to { transform: rotate(360deg); } }
+  .dsh-ar-button:hover:not(:disabled) { filter: brightness(0.97); }
+  .dsh-ar-button:active:not(:disabled) { filter: brightness(0.93); }
+  .dsh-ar-button:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: 2px; }
+  .dsh-ar-history-row {
+    display: grid;
+    grid-template-columns: 34px minmax(72px, 0.7fr) minmax(88px, 0.75fr) minmax(0, 4fr);
+    align-items: start;
+    gap: 12px;
+    padding: 12px 0;
+    border-top: 1px solid ${colors.line};
+  }
+  .dsh-ar-history-row:first-child { border-top: 0; }
+  @media (max-width: 640px) {
+    .dsh-ar-history-row {
+      grid-template-columns: 30px minmax(72px, 1fr) minmax(84px, auto);
+      gap: 8px;
+    }
+    .dsh-ar-history-description { grid-column: 2 / -1; }
+    .dsh-ar-outcome { align-items: flex-start !important; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-autoresearch-spinner] { animation: none !important; }
+  }
+`
 
 function useLab() {
   return useSyncExternalStore(subscribeLab, getLabState, getLabState)
@@ -133,10 +170,11 @@ function statusColor(status: ExperimentStatus): string {
 function LabButton(props: { children: string; onClick?: () => void; kind?: 'primary' | 'ghost' | 'danger'; disabled?: boolean; type?: 'button' | 'submit' }) {
   const kind = props.kind ?? 'ghost'
   const background = kind === 'primary' ? colors.accent : 'transparent'
-  const color = kind === 'primary' ? '#0b1220' : kind === 'danger' ? colors.bad : colors.text
-  const border = kind === 'danger' ? colors.bad : colors.line
+  const color = kind === 'primary' ? colors.onAccent : kind === 'danger' ? colors.bad : colors.text
+  const border = kind === 'primary' ? colors.accent : kind === 'danger' ? colors.bad : colors.line
   return (
     <button
+      className="dsh-ar-button"
       type={props.type ?? 'button'}
       disabled={props.disabled}
       onClick={props.onClick}
@@ -146,7 +184,8 @@ function LabButton(props: { children: string; onClick?: () => void; kind?: 'prim
         color,
         border: `1px solid ${border}`,
         borderRadius: 8,
-        padding: '6px 10px',
+        minHeight: 44,
+        padding: '0 14px',
         cursor: props.disabled ? 'not-allowed' : 'pointer',
         opacity: props.disabled ? 0.55 : 1,
         fontSize: 13,
@@ -164,6 +203,7 @@ function fieldStyle(): CSSProperties {
 function Spinner() {
   return (
     <span
+      data-autoresearch-spinner
       aria-hidden="true"
       style={{
         display: 'inline-block',
@@ -180,7 +220,15 @@ function Spinner() {
   )
 }
 
-function InitDockCard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | null }) {
+function InitDockCard({
+  ctx,
+  sessionId,
+  previousSnapshot,
+}: {
+  ctx: AnyCtx
+  sessionId: string | null
+  previousSnapshot: AutoresearchSnapshot | null
+}) {
   const lab = useLab()
   const [draft, setDraft] = useState<ExperimentDraft>(lab.draft)
 
@@ -206,7 +254,7 @@ function InitDockCard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | nul
         patchLab({ busy: false, error: decision })
         return
       }
-      hideAfterConfirm()
+      hideAfterConfirm(previousSnapshot ? progressIdentity(previousSnapshot) : null)
     } catch (error) {
       patchLab({ busy: false, error: friendlyStartError(error) })
     }
@@ -218,6 +266,7 @@ function InitDockCard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | nul
       onSubmit={(event) => void onConfirm(event)}
       style={{ display: 'grid', gap: 8 }}
     >
+      <style>{clientStyles}</style>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
         <div style={{ fontSize: 13, fontWeight: 600 }}>新开 Autoresearch</div>
         <div style={{ color: colors.muted, fontSize: 12 }}>确认前不会开跑</div>
@@ -263,126 +312,193 @@ function InitDockCard({ ctx, sessionId }: { ctx: AnyCtx; sessionId: string | nul
 
 function WaitingCard() {
   return (
-    <div data-autoresearch="waiting-card" style={{ color: colors.muted, fontSize: 13 }}>
-      等 agent 在对话里对齐需求
+    <div data-autoresearch="waiting-card" role="status" style={{ display: 'flex', alignItems: 'center', color: colors.muted, fontSize: 13, minHeight: 28 }}>
+      <style>{clientStyles}</style>
+      <Spinner />
+      正在准备新目标，完成第一轮后会显示结果
     </div>
   )
 }
 
 function RunningCard({ name, command }: { name: string | null; command: string | null }) {
   return (
-    <div data-autoresearch="running-card" style={{ ...mono, fontSize: 13, color: colors.text }}>
-      <style>{'@keyframes dsh-ar-spin { to { transform: rotate(360deg); } }'}</style>
+    <div data-autoresearch="running-card" role="status" style={{ fontSize: 13, color: colors.text }}>
+      <style>{clientStyles}</style>
       <Spinner />
-      <span style={{ color: colors.warn }}>running…</span>
-      {name ? <span style={{ color: colors.muted }}>{` │ ${name}`}</span> : null}
-      {command ? <span style={{ color: colors.muted }}>{` │ ${command}`}</span> : null}
-      <span style={{ color: colors.muted }}> │ waiting for first logged result</span>
+      <span style={{ fontWeight: 600 }}>正在优化</span>
+      {name ? <span style={{ color: colors.muted }}>{` · ${name}`}</span> : null}
+      {command ? <span style={{ ...mono, color: colors.muted }}>{` · ${command}`}</span> : null}
+      <span style={{ color: colors.muted }}> · 第一轮完成后显示结果</span>
     </div>
   )
 }
 
+function statusLabel(status: ExperimentStatus): string {
+  if (status === 'keep') return '保留'
+  if (status === 'discard') return '未采用'
+  if (status === 'crash') return '运行失败'
+  return '检查未通过'
+}
+
 function ProgressCard({
   model,
+  snapshot,
   ctx,
   sessionId,
 }: {
   model: DashboardModel
+  snapshot: AutoresearchSnapshot
   ctx: AnyCtx
   sessionId: string | null
 }) {
   const lab = useLab()
   const progressDelta = formatDeltaPct(model.progress?.deltaPct ?? null)
   const deltaTone = model.progress?.improved === true ? colors.good : model.progress?.improved === false ? colors.bad : colors.muted
+  const ended = model.lifecycle === 'ended'
+  const stateTone = ended ? colors.good : colors.accent
+
+  async function onPause(): Promise<void> {
+    if (!sessionId || lab.busy) return
+    patchLab({ busy: true, error: null })
+    try {
+      await executeLine(ctx, sessionId, '/autoresearch off')
+      patchLab({ busy: false })
+    } catch (error) {
+      patchLab({ busy: false, error: friendlyStartError(error) })
+    }
+  }
 
   return (
-    <div data-autoresearch="progress-card" style={{ display: 'grid', gap: 8, fontSize: 13 }}>
-      <style>{'@keyframes dsh-ar-spin { to { transform: rotate(360deg); } }'}</style>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-        <div data-autoresearch="progress-title" style={{ fontSize: 13, fontWeight: 600 }}>{model.title}</div>
-        {model.paused ? <span style={{ color: colors.warn, fontSize: 12 }}>paused</span> : null}
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline' }}>
-        <span>Runs {model.runs}</span>
-        <span data-autoresearch="kept" style={{ color: colors.good }}>{model.kept} kept</span>
-        {model.conf !== null ? (
-          <span data-autoresearch="conf" style={{ color: colors.muted }}>{`(conf: ${model.conf.toFixed(1)}×)`}</span>
-        ) : null}
-        {model.discarded > 0 ? (
-          <span data-autoresearch="discarded" style={{ color: colors.warn }}>{model.discarded} discarded</span>
-        ) : null}
-        {model.crashed > 0 ? (
-          <span style={{ color: colors.bad }}>{model.crashed} crashed</span>
-        ) : null}
-        {model.checksFailed > 0 ? (
-          <span style={{ color: colors.bad }}>{model.checksFailed} checks failed</span>
-        ) : null}
-      </div>
-      {model.baseline ? (
-        <div data-autoresearch="baseline" style={{ color: colors.muted }}>
-          Baseline ★ {model.metricName}: {model.baseline.value} #{model.baseline.run}
+    <section data-autoresearch="progress-card" aria-label="Autoresearch 结果" style={{ display: 'grid', gap: 16, fontSize: 14 }}>
+      <style>{clientStyles}</style>
+      <header
+        data-ud-check="progress-header"
+        data-ud-role="title"
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: colors.muted, fontSize: 12, marginBottom: 3 }}>Autoresearch</div>
+          <div data-autoresearch="progress-title" style={{ fontSize: 18, lineHeight: 1.3, fontWeight: 650, overflowWrap: 'anywhere' }}>
+            {model.name ?? '未命名目标'}
+          </div>
         </div>
-      ) : null}
-      {model.progress ? (
-        <div data-autoresearch="progress-best">
-          <span style={{ color: colors.muted }}>Progress </span>
-          <span style={{ color: colors.warn, fontWeight: 600 }}>
-            ★ {model.metricName}: {model.progress.value}
-          </span>
-          <span style={{ color: colors.muted }}>{` #${model.progress.run}`}</span>
+        <div
+          role="status"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 7,
+            color: stateTone,
+            background: `color-mix(in srgb, ${stateTone} 10%, transparent)`,
+            borderRadius: 9999,
+            padding: '6px 10px',
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: '50%', background: stateTone }} />
+          {ended ? '本轮已结束' : '正在优化'}
+        </div>
+      </header>
+
+      <div
+        className="dsh-ar-outcome"
+        data-ud-check="progress-outcome"
+        data-ud-role="panel"
+        style={{
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'space-between',
+          gap: 16,
+          flexWrap: 'wrap',
+          padding: '14px 16px',
+          borderRadius: 8,
+          background: colors.subtle,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', ...tabular }}>
+          <div>
+            <div style={{ color: colors.muted, fontSize: 11, marginBottom: 2 }}>基线 · {model.metricName}</div>
+            <div data-autoresearch="baseline" style={{ color: colors.muted, fontSize: 16, fontWeight: 550 }}>
+              {model.baseline?.value ?? '—'}
+            </div>
+          </div>
+          <span aria-hidden="true" style={{ color: colors.muted, fontSize: 18 }}>→</span>
+          <div>
+            <div style={{ color: colors.muted, fontSize: 11, marginBottom: 2 }}>当前最佳</div>
+            <div data-autoresearch="progress-best" style={{ color: model.progress ? colors.text : colors.muted, fontSize: 26, lineHeight: 1, fontWeight: 700 }}>
+              {model.progress?.value ?? '—'}
+            </div>
+          </div>
           {progressDelta ? (
-            <span data-autoresearch="delta" style={{ color: deltaTone }}>
-              {` ${progressDelta}`}
+            <span data-autoresearch="delta" style={{ color: deltaTone, fontWeight: 650, fontSize: 14 }}>
+              {progressDelta}
             </span>
           ) : null}
         </div>
-      ) : null}
+        <div style={{ color: colors.muted, fontSize: 12, lineHeight: 1.6, ...tabular }}>
+          <span>本轮 {model.runs}</span>
+          <span data-autoresearch="kept"> · 保留 {model.kept}</span>
+          {model.discarded > 0 ? <span data-autoresearch="discarded"> · 未采用 {model.discarded}</span> : null}
+          {model.crashed > 0 ? <span style={{ color: colors.bad }}> · 失败 {model.crashed}</span> : null}
+          {model.checksFailed > 0 ? <span style={{ color: colors.bad }}> · 检查未过 {model.checksFailed}</span> : null}
+          {model.conf !== null ? <span data-autoresearch="conf"> · 可信度 {model.conf.toFixed(1)}×</span> : null}
+        </div>
+      </div>
+
       {model.secondaries.length > 0 ? (
-        <div style={{ color: colors.muted, fontSize: 12 }}>
+        <div style={{ color: colors.muted, fontSize: 12, display: 'flex', gap: 12, flexWrap: 'wrap', ...tabular }}>
           {model.secondaries.map((item) => {
             const delta = formatDeltaPct(item.deltaPct)
-            return (
-              <span key={item.name} style={{ marginRight: 10 }}>
-                {item.name}: {item.value}
-                {delta ? ` ${delta}` : ''}
-              </span>
-            )
+            return <span key={item.name}>{item.name} {item.value}{delta ? ` · ${delta}` : ''}</span>
           })}
         </div>
       ) : null}
-      <div style={{ overflow: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, ...mono }}>
-          <thead>
-            <tr style={{ color: colors.muted, textAlign: 'left' }}>
-              {['#', 'commit', `★ ${model.metricName}`, 'status', 'description'].map((head) => (
-                <th key={head} style={{ padding: '4px 6px', borderBottom: `1px solid ${colors.line}`, fontWeight: 500 }}>{head}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {model.rows.map((row) => (
-              <tr key={row.run} data-autoresearch-run={row.run} data-autoresearch-status={row.status}>
-                <td style={{ padding: '4px 6px', borderBottom: `1px solid ${colors.line}` }}>{row.run}</td>
-                <td style={{ padding: '4px 6px', borderBottom: `1px solid ${colors.line}` }}>{row.commit}</td>
-                <td style={{ padding: '4px 6px', borderBottom: `1px solid ${colors.line}` }}>{row.metric}</td>
-                <td style={{ padding: '4px 6px', borderBottom: `1px solid ${colors.line}`, color: statusColor(row.status) }}>{row.status}</td>
-                <td style={{ padding: '4px 6px', borderBottom: `1px solid ${colors.line}`, fontFamily: font.fontFamily }}>{row.description}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+
+      <div data-ud-check="experiment-history" data-ud-role="panel">
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 3 }}>
+          <div style={{ fontWeight: 650 }}>最近实验</div>
+          <div style={{ color: colors.muted, fontSize: 12 }}>显示最近 {model.rows.length} 轮</div>
+        </div>
+        <ol aria-label="最近实验" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+          {model.rows.map((row) => (
+            <li
+              className="dsh-ar-history-row"
+              key={row.run}
+              data-autoresearch-run={row.run}
+              data-autoresearch-status={row.status}
+            >
+              <div aria-label={`第 ${row.run} 轮`} style={{ color: colors.muted, fontSize: 12, paddingTop: 3, ...tabular }}>#{row.run}</div>
+              <div style={{ color: statusColor(row.status), fontSize: 12, fontWeight: 650, paddingTop: 3 }}>
+                {statusLabel(row.status)}
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 650, paddingTop: 1, ...tabular }}>{row.metric}</div>
+              <div className="dsh-ar-history-description" style={{ minWidth: 0, lineHeight: 1.55, overflowWrap: 'anywhere' }}>
+                <div>{row.description}</div>
+                {row.commit !== '—' ? <div style={{ ...mono, color: colors.muted, fontSize: 11, marginTop: 3 }}>版本 {row.commit}</div> : null}
+              </div>
+            </li>
+          ))}
+        </ol>
       </div>
+
       {model.running ? (
-        <div data-autoresearch="running-line" style={{ ...mono, color: colors.warn, fontSize: 12 }}>
+        <div data-autoresearch="running-line" role="status" style={{ color: colors.muted, fontSize: 12 }}>
           <Spinner />
-          running…{model.runningCommand ? ` ${model.runningCommand}` : ''}
+          正在执行当前实验{model.runningCommand ? <span style={mono}>{` · ${model.runningCommand}`}</span> : null}
         </div>
       ) : null}
-      {lab.error ? <div style={{ color: colors.bad, fontSize: 12, whiteSpace: 'pre-wrap' }}>{lab.error}</div> : null}
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <LabButton disabled={!sessionId || lab.busy} onClick={() => sessionId && void executeLine(ctx, sessionId, '/autoresearch off')}>暂停</LabButton>
+      {lab.error ? <div role="alert" style={{ color: colors.bad, fontSize: 12, whiteSpace: 'pre-wrap' }}>{lab.error}</div> : null}
+      <div data-ud-check="progress-action" data-ud-role="panel" style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        {ended ? (
+          <LabButton kind="primary" onClick={() => dismissProgress(snapshot)}>关闭结果</LabButton>
+        ) : (
+          <LabButton disabled={!sessionId || lab.busy} onClick={() => void onPause()}>
+            {lab.busy ? '正在暂停…' : '暂停'}
+          </LabButton>
+        )}
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -395,23 +511,39 @@ function AutoresearchDock({ ctx, sessionId, useSession, useProjection, session }
   const snapshot = progress.kind === 'board'
     ? preferLedgerSnapshot(progress.snapshot, projected) ?? progress.snapshot
     : progress.snapshot
+  const model = snapshot ? buildDashboardModel(snapshot, {
+    running: progress.runningExperiment,
+    runningCommand: progress.runningCommand,
+  }) : null
 
   if (lab.dock === 'init') {
     return (
       <div data-autoresearch="dock" style={dockShell}>
-        <InitDockCard ctx={ctx} sessionId={sessionId} />
+        <InitDockCard ctx={ctx} sessionId={sessionId} previousSnapshot={snapshot} />
       </div>
     )
   }
 
-  if (progress.kind === 'board' && snapshot && (snapshot.results?.length ?? 0) > 0) {
-    const model = buildDashboardModel(snapshot, {
-      running: progress.runningExperiment,
-      runningCommand: progress.runningCommand,
-    })
+  if (snapshot && isProgressDismissed(snapshot)) return null
+
+  const superseded = Boolean(
+    lab.dock === 'waiting'
+    && lab.supersededProgressKey
+    && snapshot
+    && progressIdentity(snapshot) === lab.supersededProgressKey,
+  )
+  if (superseded) {
     return (
       <div data-autoresearch="dock" style={dockShell}>
-        <ProgressCard model={model} ctx={ctx} sessionId={sessionId} />
+        <WaitingCard />
+      </div>
+    )
+  }
+
+  if (progress.kind === 'board' && snapshot && model && model.runs > 0) {
+    return (
+      <div data-autoresearch="dock" style={dockShell}>
+        <ProgressCard model={model} snapshot={snapshot} ctx={ctx} sessionId={sessionId} />
       </div>
     )
   }
@@ -419,7 +551,7 @@ function AutoresearchDock({ ctx, sessionId, useSession, useProjection, session }
   if (progress.kind === 'running') {
     return (
       <div data-autoresearch="dock" style={dockShell}>
-          <RunningCard name={projected?.name ?? snapshot?.name ?? null} command={progress.runningCommand} />
+        <RunningCard name={projected?.name ?? snapshot?.name ?? null} command={progress.runningCommand} />
       </div>
     )
   }

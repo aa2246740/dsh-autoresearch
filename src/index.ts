@@ -168,6 +168,17 @@ function followup(agent: { followup?: (message: unknown) => void } | undefined, 
   agent.followup(userMessage(text))
 }
 
+function playbookFor(result: ToolResult): string {
+  if (!result.needsSetup) return CONTINUE_PLAYBOOK
+  const goal = result.snapshot?.goal?.trim()
+  return goal ? `${CREATE_PLAYBOOK}\n\nCurrent explicit goal: ${goal}` : CREATE_PLAYBOOK
+}
+
+function appendSnapshot(session: SessionLike | undefined, result: ToolResult): void {
+  if (!result.snapshot || typeof session?.append !== 'function') return
+  session.append('autoresearch/state', { snapshot: result.snapshot })
+}
+
 function isActivating(args: string): boolean {
   const command = args.trim().toLowerCase()
   if (!command) return false
@@ -240,7 +251,7 @@ export function apply(ctx: Context, config: Config): void {
         protectedPaths: protectedPathsFromSession(exec.agent?.session, cwd),
       }))
       if (result.ok && result.active && isActivating(raw)) {
-        followup(exec.agent, result.needsSetup ? CREATE_PLAYBOOK : CONTINUE_PLAYBOOK)
+        followup(exec.agent, playbookFor(result))
       }
       return result
     },
@@ -346,8 +357,9 @@ export function apply(ctx: Context, config: Config): void {
           args: raw,
           protectedPaths: protectedPathsFromSession(invocation.agent.session, cwd),
         }))
+        appendSnapshot(invocation.agent.session, result)
         if (result.ok && result.active && isActivating(raw)) {
-          followup(invocation.agent, result.needsSetup ? CREATE_PLAYBOOK : CONTINUE_PLAYBOOK)
+          followup(invocation.agent, playbookFor(result))
         }
         return { kind: result.ok ? 'success' : 'error', text: result.text }
       },
@@ -362,7 +374,9 @@ export function apply(ctx: Context, config: Config): void {
         const cwd = workspaceOf(assemble.agent)
         const state = controllerFor(cwd).privateState()
         if (state.active !== true || state.manualOff === true) return ''
-        return CREATE_PLAYBOOK
+        return state.pendingNewGoal && state.goal
+          ? `${CREATE_PLAYBOOK}\n\nCurrent explicit goal: ${state.goal}`
+          : CREATE_PLAYBOOK
       },
     })
   })
@@ -382,7 +396,7 @@ export function apply(ctx: Context, config: Config): void {
         description: 'Finalize an autoresearch session into clean, reviewable branches.',
         source: 'runtime',
         content: bodies.finalize,
-        invocation: { modelInvocable: false, userInvocable: true },
+        invocation: { modelInvocable: false, userInvocable: false },
       })
     }
     if (bodies.hooks) {
@@ -391,7 +405,7 @@ export function apply(ctx: Context, config: Config): void {
         description: 'Author before/after hooks for an autoresearch session.',
         source: 'runtime',
         content: bodies.hooks,
-        invocation: { modelInvocable: false, userInvocable: true },
+        invocation: { modelInvocable: false, userInvocable: false },
       })
     }
   })
@@ -408,7 +422,7 @@ export function apply(ctx: Context, config: Config): void {
         viewSchema: autoresearchProjectionSchema,
         view: (state: AutoresearchSnapshot | null) => state,
       },
-      stateVersion: 3,
+      stateVersion: 4,
     })
   })
 }

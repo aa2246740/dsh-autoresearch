@@ -357,9 +357,12 @@ function confidenceFor(results, segment, direction) {
 
 function defaultPrivateState(cwd, workDir) {
   return {
-    version: 1,
+    version: 2,
     cwd,
     workDir,
+    sessionEpoch: 0,
+    goal: null,
+    pendingNewGoal: false,
     active: false,
     manualOff: false,
     autoResumeTurns: 0,
@@ -905,7 +908,7 @@ export class AutoresearchController {
         baseline_metric: baseline,
         best_metric: best,
         run_count: current.length,
-        goal: persisted.name ?? "",
+        goal: typeof extra?.goal === "string" ? extra.goal : persisted.name ?? "",
       },
     };
     const result = await runHook(payload);
@@ -923,7 +926,7 @@ export class AutoresearchController {
         ...status,
         text: [
           "Autoresearch commands:",
-          "- /autoresearch <goal> - start or update a loop",
+          "- /autoresearch <goal> - start a new goal",
           "- /autoresearch resume - resume the persisted loop",
           "- /autoresearch off - stop automatic continuation",
           "- /autoresearch clear - delete the experiment log and stop",
@@ -942,7 +945,7 @@ export class AutoresearchController {
       for (const candidate of Object.values(sessionFileCandidates(this.workDir(), "log"))) {
         try { fs.unlinkSync(candidate); } catch (error) { if (error.code !== "ENOENT") throw error; }
       }
-      this.savePrivate({ active: false, manualOff: false, autoResumeTurns: 0, pendingResumeToken: null, lastRunChecks: null, lastRunDuration: null, hintsThisSession: 0 });
+      this.savePrivate({ active: false, manualOff: false, pendingNewGoal: false, goal: null, autoResumeTurns: 0, pendingResumeToken: null, lastRunChecks: null, lastRunDuration: null, hintsThisSession: 0 });
       return { ok: true, active: false, text: "Autoresearch log cleared and automatic continuation stopped." };
     }
     if (command === "export") {
@@ -961,7 +964,10 @@ export class AutoresearchController {
       return { ok: true, active: this.privateState().active, action: "hooks", text: "Load and follow the autoresearch-hooks support skill. Do not activate a new loop." };
     }
 
-    if (/^(start|resume)(?:\s|$)/i.test(text)) text = text.replace(/^(start|resume)\s*/i, "").trim();
+    const explicitResume = /^resume\s*$/i.test(text);
+    if (/^start(?:\s|$)/i.test(text)) text = text.replace(/^start\s*/i, "").trim();
+    else if (/^resume(?:\s|$)/i.test(text)) text = text.replace(/^resume\s*/i, "").trim();
+    const isNewGoal = !explicitResume && text.length > 0;
     const inferred = inferAutoresearchConfigFromPrompt(text);
     const configNotes = inferred ? applyInferredAutoresearchConfig(this.cwd, inferred) : [];
     const safety = this.prepareGitSafety(protectedPaths);
@@ -976,23 +982,30 @@ export class AutoresearchController {
       };
     }
 
-    const before = this.privateState().active ? { steer: null } : await this.fireHook("before", {
-      next_run: this.persisted().results.length + 1,
-      last_run: this.persisted().results.at(-1) ?? null,
-    });
+    const previousPrivate = this.privateState();
+    const beforeNeeded = !previousPrivate.active || isNewGoal;
+    const previousPersisted = this.persisted();
     this.savePrivate({
       active: true,
       manualOff: false,
+      sessionEpoch: isNewGoal ? previousPrivate.sessionEpoch + 1 : previousPrivate.sessionEpoch,
+      goal: isNewGoal ? text : previousPrivate.goal,
+      pendingNewGoal: isNewGoal ? true : previousPrivate.pendingNewGoal,
       autoResumeTurns: 0,
       pendingResumeToken: null,
       hintsThisSession: 0,
       protectedPaths: safety.protectedPaths ?? this.protectedPaths(protectedPaths),
       protectionMode: safety.protectionMode ?? "snapshot",
     });
+    const before = beforeNeeded ? await this.fireHook("before", {
+      goal: isNewGoal ? text : previousPrivate.goal,
+      next_run: isNewGoal ? 1 : previousPersisted.results.length + 1,
+      last_run: isNewGoal ? null : previousPersisted.results.at(-1) ?? null,
+    }) : { steer: null };
     const logPath = sessionFilePath(this.workDir(), "log");
     const hasHeader = fs.existsSync(logPath) && hasAutoresearchConfigHeader(fs.readFileSync(logPath, "utf8"));
     const hasPrompt = fs.existsSync(sessionFilePath(this.workDir(), "prompt"));
-    const needsSetup = !hasHeader || !hasPrompt;
+    const needsSetup = isNewGoal || this.privateState().pendingNewGoal || !hasHeader || !hasPrompt;
     return {
       ok: true,
       active: true,
@@ -1007,7 +1020,9 @@ export class AutoresearchController {
         safety.setupText ?? "",
         safety.warning ?? "",
         needsSetup
-          ? "Setup is incomplete. Inspect the project, create .auto/prompt.md and a deterministic benchmark, then call init_experiment."
+          ? isNewGoal
+            ? "This is a new goal. Replace .auto/prompt.md for this goal, prepare its deterministic benchmark, then call init_experiment to start a fresh segment."
+            : "Setup is incomplete. Inspect the project, create .auto/prompt.md and a deterministic benchmark, then call init_experiment."
           : "Read .auto/prompt.md and the persisted log, then continue with the next experiment.",
         before.steer ? `Before hook:\n${before.steer}` : "",
       ].filter(Boolean).join("\n"),
@@ -1034,7 +1049,7 @@ export class AutoresearchController {
       bestDirection: direction === "higher" ? "higher" : "lower",
     };
     fs.appendFileSync(jsonlPath, `${JSON.stringify(entry)}\n`);
-    this.savePrivate({ active: true, manualOff: false, pendingResumeToken: null, lastRunChecks: null, lastRunDuration: null });
+    this.savePrivate({ active: true, manualOff: false, pendingNewGoal: false, pendingResumeToken: null, lastRunChecks: null, lastRunDuration: null });
     this.notifyChange();
     const before = await this.fireHook("before", {
       next_run: previous.results.length + 1,
@@ -1321,7 +1336,9 @@ export class AutoresearchController {
   async status() {
     const privateState = this.privateState();
     const persisted = this.persisted();
-    const current = persisted.results.filter((run) => run.segment === persisted.currentSegment);
+    const current = privateState.pendingNewGoal
+      ? []
+      : persisted.results.filter((run) => run.segment === persisted.currentSegment);
     const kept = current.filter((run) => run.status === "keep");
     const bestKeptMetric = kept.length === 0 ? null : kept.reduce((best, run) => {
       return persisted.bestDirection === "lower" ? Math.min(best, run.metric) : Math.max(best, run.metric);
@@ -1332,13 +1349,17 @@ export class AutoresearchController {
       ok: true,
       active,
       manualOff: privateState.manualOff === true,
+      pendingNewGoal: privateState.pendingNewGoal === true,
+      sessionEpoch: privateState.sessionEpoch,
       currentSegmentRuns: current.length,
       totalRuns: persisted.results.length,
       bestKeptMetric,
-      metricName: persisted.metricName,
+      metricName: privateState.pendingNewGoal ? "metric" : persisted.metricName,
       pendingContinuation: Boolean(privateState.pendingResumeToken),
       resume,
-      text: resume.shouldSchedule
+      text: privateState.pendingNewGoal && active
+        ? `Autoresearch is preparing a fresh segment for the new goal: ${privateState.goal ?? "untitled goal"}.`
+        : resume.shouldSchedule
         ? [
             CONTINUATION_REQUIRED,
             "A same-session continuation is pending. End this turn; the host will follow up.",
@@ -1354,7 +1375,11 @@ export class AutoresearchController {
   snapshot() {
     const privateState = this.privateState();
     const persisted = this.persisted();
-    const current = persisted.results.filter((run) => run.segment === persisted.currentSegment);
+    const nextSegment = persisted.results.length > 0 ? persisted.currentSegment + 1 : persisted.currentSegment;
+    const currentSegment = privateState.pendingNewGoal ? nextSegment : persisted.currentSegment;
+    const current = privateState.pendingNewGoal
+      ? []
+      : persisted.results.filter((run) => run.segment === persisted.currentSegment);
     const kept = current.filter((run) => run.status === "keep");
     const bestKeptMetric = kept.length === 0 ? null : kept.reduce((best, run) => {
       return persisted.bestDirection === "lower" ? Math.min(best, run.metric) : Math.max(best, run.metric);
@@ -1378,19 +1403,23 @@ export class AutoresearchController {
       workDir,
       active: privateState.active === true && privateState.manualOff !== true,
       manualOff: privateState.manualOff === true,
-      needsSetup: !hasHeader || !hasPrompt,
+      pendingNewGoal: privateState.pendingNewGoal === true,
+      needsSetup: privateState.pendingNewGoal === true || !hasHeader || !hasPrompt,
       pendingContinuation: Boolean(privateState.pendingResumeToken),
       gitOk: safety.ok === true,
       gitError: safety.error ?? null,
       allowNoGit: safety.allowNoGit === true,
       protectionMode: safety.protectionMode ?? privateState.protectionMode ?? "pending",
       protectedPathCount: this.protectedPaths().length,
-      name: persisted.name,
-      metricName: persisted.metricName,
-      metricUnit: persisted.metricUnit,
-      direction: persisted.bestDirection,
+      goal: privateState.goal,
+      sessionEpoch: privateState.sessionEpoch,
+      name: privateState.pendingNewGoal ? privateState.goal : persisted.name,
+      metricName: privateState.pendingNewGoal ? "metric" : persisted.metricName,
+      metricUnit: privateState.pendingNewGoal ? "" : persisted.metricUnit,
+      direction: privateState.pendingNewGoal ? "lower" : persisted.bestDirection,
       maxIterations,
       maxAutoResumeTurns,
+      currentSegment,
       currentSegmentRuns: current.length,
       totalRuns: persisted.results.length,
       baselineMetric: current[0]?.metric ?? null,

@@ -32,6 +32,14 @@ export function longerSnapshot(
 ): AutoresearchSnapshot | null {
   if (!next) return current ?? null
   if (!current) return next
+  const nextEpoch = next.sessionEpoch ?? 0
+  const currentEpoch = current.sessionEpoch ?? 0
+  if (nextEpoch > currentEpoch) return next
+  if (nextEpoch < currentEpoch) return current
+  const nextSegment = next.currentSegment ?? next.results.at(-1)?.segment ?? 0
+  const currentSegment = current.currentSegment ?? current.results.at(-1)?.segment ?? 0
+  if (nextSegment > currentSegment) return next
+  if (nextSegment < currentSegment) return current
   const nextLen = ledgerLength(next)
   const currentLen = ledgerLength(current)
   if (nextLen > currentLen) return next
@@ -70,9 +78,11 @@ export function preferLedgerSnapshot(
   projected: AutoresearchSnapshot | null | undefined,
 ): AutoresearchSnapshot | null {
   if (ledgerLength(conversation) === 0) return conversation ?? null
-  if (ledgerLength(projected) <= ledgerLength(conversation)) return conversation ?? null
+  if (!projected) return conversation ?? null
   if (conversation?.name && projected?.name && conversation.name !== projected.name) {
-    return conversation
+    const projectedEpoch = projected.sessionEpoch ?? 0
+    const conversationEpoch = conversation.sessionEpoch ?? 0
+    if (projectedEpoch <= conversationEpoch) return conversation
   }
-  return projected ?? conversation ?? null
+  return longerSnapshot(conversation, projected)
 }

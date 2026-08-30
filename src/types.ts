@@ -21,6 +21,12 @@ export interface PrivateState {
   version: number
   cwd: string
   workDir: string
+  /** Monotonic identity for each explicit new goal in this workspace. */
+  sessionEpoch: number
+  /** The explicit user goal for the current epoch, before/after experiment init. */
+  goal: string | null
+  /** A new goal exists but has not appended its config header yet. */
+  pendingNewGoal: boolean
   active: boolean
   manualOff: boolean
   autoResumeTurns: number
@@ -54,6 +60,8 @@ export interface ToolResult {
   configNotes?: string[]
   pendingContinuation?: boolean
   manualOff?: boolean
+  pendingNewGoal?: boolean
+  sessionEpoch?: number
   currentSegmentRuns?: number
   totalRuns?: number
   bestKeptMetric?: number | null
@@ -69,6 +77,7 @@ export interface AutoresearchSnapshot {
   workDir: string
   active: boolean
   manualOff: boolean
+  pendingNewGoal: boolean
   needsSetup: boolean
   pendingContinuation: boolean
   gitOk: boolean
@@ -76,12 +85,15 @@ export interface AutoresearchSnapshot {
   allowNoGit: boolean
   protectionMode: 'pending' | 'git' | 'snapshot'
   protectedPathCount: number
+  goal: string | null
+  sessionEpoch: number
   name: string | null
   metricName: string
   metricUnit: string
   direction: MetricDirection
   maxIterations: number | null
   maxAutoResumeTurns: number | null
+  currentSegment: number
   currentSegmentRuns: number
   totalRuns: number
   baselineMetric: number | null

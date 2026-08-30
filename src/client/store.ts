@@ -26,6 +26,9 @@ export interface LabState {
   error: string | null
   busy: boolean
   notice: string | null
+  dismissedProgressKey: string | null
+  /** Previous rendered result hidden while an explicit new goal is preparing. */
+  supersededProgressKey: string | null
 }
 
 const initial: LabState = {
@@ -38,6 +41,8 @@ const initial: LabState = {
   error: null,
   busy: false,
   notice: null,
+  dismissedProgressKey: null,
+  supersededProgressKey: null,
 }
 
 let state = initial
@@ -75,6 +80,7 @@ export function showInitDock(): void {
     draft: emptyDraft(),
     error: null,
     busy: false,
+    supersededProgressKey: null,
   })
 }
 
@@ -82,25 +88,41 @@ export function showInitDock(): void {
  * After 「确认并开始」: send the slash line, then leave the progress UI closed.
  * The agent may still ask about requirements; the board appears only after run/log.
  */
-export function hideAfterConfirm(): void {
+export function hideAfterConfirm(previousProgressKey: string | null = null): void {
   patchLab({
     dock: 'waiting',
     page: 'create',
     phase: 'idle',
     busy: false,
     error: null,
+    supersededProgressKey: previousProgressKey,
   })
 }
 
 /** Hide the init/waiting dock. Progress cards are conversation-driven and ignore this. */
 export function cancelInitDock(): void {
   if (state.dock !== 'init' && state.dock !== 'waiting') return
-  patchLab({ dock: 'hidden', page: 'create', phase: 'idle', error: null })
+  patchLab({ dock: 'hidden', page: 'create', phase: 'idle', error: null, supersededProgressKey: null })
 }
 
 export function rememberSession(sessionId: string): void {
   if (state.sessionId === sessionId) return
-  patchLab({ sessionId })
+  patchLab({ sessionId, dismissedProgressKey: null, supersededProgressKey: null })
+}
+
+export function progressIdentity(snapshot: AutoresearchSnapshot): string {
+  const segment = snapshot.currentSegment ?? snapshot.results.at(-1)?.segment ?? 0
+  const epoch = snapshot.sessionEpoch ?? 0
+  return [snapshot.workDir, epoch, segment, snapshot.name ?? snapshot.goal ?? 'autoresearch'].join('::')
+}
+
+/** Dismiss only this rendered result; a later explicit goal has a new epoch. */
+export function dismissProgress(snapshot: AutoresearchSnapshot): void {
+  patchLab({ dismissedProgressKey: progressIdentity(snapshot), error: null })
+}
+
+export function isProgressDismissed(snapshot: AutoresearchSnapshot): boolean {
+  return state.dismissedProgressKey === progressIdentity(snapshot)
 }
 
 /**

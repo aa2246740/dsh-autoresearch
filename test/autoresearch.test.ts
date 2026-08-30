@@ -18,11 +18,14 @@ import {
   applyCommandText,
   buildStartLine,
   cancelInitDock,
+  dismissProgress,
   emptyDraft,
   friendlyStartError,
   getLabState,
   hideAfterConfirm,
+  isProgressDismissed,
   parseRoundBudget,
+  progressIdentity,
   resetLab,
   showInitDock,
   startDecisionMessage,
@@ -85,6 +88,7 @@ function emptySnapshot(overrides: Partial<AutoresearchSnapshot> = {}): Autoresea
     workDir: '/tmp',
     active: false,
     manualOff: false,
+    pendingNewGoal: false,
     needsSetup: true,
     pendingContinuation: false,
     gitOk: true,
@@ -92,12 +96,15 @@ function emptySnapshot(overrides: Partial<AutoresearchSnapshot> = {}): Autoresea
     allowNoGit: false,
     protectionMode: 'git',
     protectedPathCount: 0,
+    goal: null,
+    sessionEpoch: 0,
     name: null,
     metricName: 'metric',
     metricUnit: '',
     direction: 'lower',
     maxIterations: 3,
     maxAutoResumeTurns: 3,
+    currentSegment: 0,
     currentSegmentRuns: 0,
     totalRuns: 0,
     baselineMetric: null,
@@ -368,6 +375,89 @@ test('projection fold keeps the longer ledger from later tool results', () => {
   assert.equal(preferLedgerSnapshot(namedFirst, emptySnapshot({ name: 'other', results: later.results }))?.name, 'tiny')
 })
 
+test('command state events can end a card without adding another ledger row', () => {
+  const active = emptySnapshot({
+    active: true,
+    sessionEpoch: 2,
+    currentSegment: 1,
+    results: [sampleRun({ run: 1, segment: 1, metric: 10, status: 'keep' })],
+    updatedAt: 10,
+  })
+  const ended = emptySnapshot({ ...active, active: false, manualOff: true, updatedAt: 20 })
+  const folded = foldAutoresearchProjection(active, {
+    type: 'autoresearch/state',
+    data: { snapshot: ended },
+  })
+  assert.equal(folded?.active, false)
+  assert.equal(folded?.manualOff, true)
+  assert.equal(folded?.results.length, 1)
+})
+
+test('a newer goal epoch supersedes a longer old ledger before its first baseline', () => {
+  const old = emptySnapshot({
+    sessionEpoch: 1,
+    currentSegment: 0,
+    name: 'old-goal',
+    active: false,
+    results: [
+      sampleRun({ run: 1, segment: 0, metric: 10, status: 'keep' }),
+      sampleRun({ run: 2, segment: 0, metric: 8, status: 'keep' }),
+      sampleRun({ run: 3, segment: 0, metric: 12, status: 'discard' }),
+    ],
+    updatedAt: 10,
+  })
+  const preparing = emptySnapshot({
+    sessionEpoch: 2,
+    currentSegment: 1,
+    goal: 'new stability goal',
+    name: 'new stability goal',
+    active: true,
+    pendingNewGoal: true,
+    needsSetup: true,
+    results: old.results,
+    totalRuns: old.results.length,
+    updatedAt: 20,
+  })
+
+  const folded = foldAutoresearchProjection(old, {
+    type: 'tool/result',
+    data: { meta: { snapshot: preparing } },
+  })
+  assert.equal(folded?.sessionEpoch, 2)
+  assert.equal(preferLedgerSnapshot(old, preparing)?.sessionEpoch, 2)
+  assert.equal(buildDashboardModel(preparing).runs, 0)
+})
+
+test('ended progress uses a close lifecycle instead of a running action', () => {
+  const ended = emptySnapshot({
+    active: false,
+    manualOff: true,
+    sessionEpoch: 4,
+    currentSegment: 2,
+    name: 'finished goal',
+    results: [sampleRun({ run: 1, segment: 2, metric: 90, status: 'keep' })],
+  })
+  const running = emptySnapshot({ ...ended, active: true, manualOff: false })
+
+  assert.equal(buildDashboardModel(ended).lifecycle, 'ended')
+  assert.equal(buildDashboardModel(running).lifecycle, 'running')
+})
+
+test('closing a result dismisses only that goal identity', () => {
+  resetLab()
+  const ended = emptySnapshot({
+    sessionEpoch: 4,
+    currentSegment: 2,
+    name: 'finished goal',
+    results: [sampleRun({ run: 1, segment: 2, metric: 90, status: 'keep' })],
+  })
+  const next = emptySnapshot({ ...ended, sessionEpoch: 5, currentSegment: 3, name: 'another goal' })
+  assert.notEqual(progressIdentity(ended), progressIdentity(next))
+  dismissProgress(ended)
+  assert.equal(isProgressDismissed(ended), true)
+  assert.equal(isProgressDismissed(next), false)
+})
+
 test('formatNum glues short units and spaces longer ones', () => {
   assert.equal(formatNum(2, 'ms'), '2ms')
   assert.equal(formatNum(2, 'count'), '2 count')
@@ -419,8 +509,8 @@ test('GUI drops overlay, status polling, and STATE_V1 chat dumps', () => {
   assert.doesNotMatch(source, /window\.setInterval/)
   assert.doesNotMatch(source, /executeLine\(ctx, sessionId, '\/autoresearch status'\)/)
   assert.match(source, /hideAfterConfirm/)
-  assert.match(source, /running…/)
-  assert.match(source, /等 agent 在对话里对齐需求/)
+  assert.match(source, /正在优化/)
+  assert.match(source, /正在准备新目标/)
   assert.match(source, /data-autoresearch="progress-card"/)
   assert.doesNotMatch(host, /embedState\(/)
   assert.match(host, /presentationMeta/)
@@ -428,6 +518,28 @@ test('GUI drops overlay, status polling, and STATE_V1 chat dumps', () => {
   assert.match(host, /stateSchema/)
   assert.match(host, /viewSchema/)
   assert.match(host, /wire:/)
+})
+
+test('progress UI is outcome-first, state-aware, and no longer a terminal table', () => {
+  const source = fs.readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  assert.match(source, /本轮已结束/)
+  assert.match(source, /关闭结果/)
+  assert.match(source, /正在优化/)
+  assert.doesNotMatch(source, /<table/)
+  assert.match(source, /data-ud-check="progress-header"/)
+  assert.match(source, /data-ud-check="progress-outcome"/)
+  assert.match(source, /data-ud-check="experiment-history"/)
+  assert.match(source, /data-ud-check="progress-action"/)
+})
+
+test('internal finalize and hooks skills stay out of ordinary user autocomplete', () => {
+  const source = fs.readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  for (const name of ['autoresearch-finalize', 'autoresearch-hooks']) {
+    const start = source.indexOf(`name: '${name}'`)
+    assert.notEqual(start, -1)
+    const registration = source.slice(start, start + 500)
+    assert.match(registration, /userInvocable:\s*false/)
+  }
 })
 
 test('natural-language loop controls retain finite and unlimited Pi semantics', () => {
@@ -693,6 +805,55 @@ test('status and support routes never activate autoresearch implicitly', async (
   const hooks = await controller.control({ args: 'hooks' })
   assert.equal(hooks.action, 'hooks')
   assert.equal((await controller.status()).active, false)
+  await controller.close()
+})
+
+test('off then an explicit new goal starts a fresh segment instead of resuming the old ledger', async () => {
+  const cwd = createGitFixture()
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-new-goal-state-'))
+  const controller = new AutoresearchController({ cwd, dataDir })
+
+  const firstStart = await controller.control({ args: 'old speed goal for 1 run' })
+  assert.equal(firstStart.active, true)
+  await controller.initExperiment({ name: 'old-speed', metric_name: 'fps', direction: 'higher' })
+  await controller.logExperiment({
+    metric: 90,
+    status: 'keep',
+    description: 'old baseline',
+    asi: { hypothesis: 'old goal' },
+  })
+  const oldSnapshot = controller.snapshot()
+  assert.equal(oldSnapshot.currentSegmentRuns, 1)
+
+  await controller.control({ args: 'off' })
+  const secondStart = await controller.control({ args: 'new stability goal for 2 runs' })
+  const preparing = controller.snapshot()
+  const preparingStatus = await controller.status()
+  assert.equal(secondStart.needsSetup, true)
+  assert.equal(preparing.active, true)
+  assert.equal(preparing.pendingNewGoal, true)
+  assert.ok(preparing.sessionEpoch > oldSnapshot.sessionEpoch)
+  assert.equal(preparing.currentSegment, oldSnapshot.currentSegment + 1)
+  assert.equal(preparing.currentSegmentRuns, 0)
+  assert.equal(preparing.bestKeptMetric, null)
+  assert.equal(preparingStatus.currentSegmentRuns, 0)
+  assert.equal(preparingStatus.bestKeptMetric, null)
+
+  await controller.initExperiment({ name: 'new-stability', metric_name: 'low_fps', direction: 'higher' })
+  const initialized = controller.snapshot()
+  assert.equal(initialized.pendingNewGoal, false)
+  assert.equal(initialized.currentSegment, oldSnapshot.currentSegment + 1)
+  assert.equal(initialized.currentSegmentRuns, 0)
+  await controller.logExperiment({
+    metric: 91,
+    status: 'keep',
+    description: 'new baseline',
+    asi: { hypothesis: 'new goal' },
+  })
+  const current = await controller.status()
+  assert.equal(current.currentSegmentRuns, 1)
+  assert.equal(current.totalRuns, 2)
+  assert.equal(current.metricName, 'low_fps')
   await controller.close()
 })
 
@@ -972,6 +1133,7 @@ test('host plugin source is a named apply without a default export', () => {
   assert.equal(/export\s+default\s+/.test(source), false)
   assert.equal(/append\?\.\(\['"]autoresearch\//.test(source), false)
   assert.match(source, /toJsonValue/)
+  assert.match(source, /appendSnapshot\(invocation\.agent\.session, result\)/)
 })
 
 test('tool payloads drop undefined keys so harness JSON snapshotting succeeds', () => {

@@ -34,7 +34,7 @@ export interface DashboardModel {
   rows: DashboardRow[]
   running: boolean
   runningCommand: string | null
-  paused: boolean
+  lifecycle: 'running' | 'ended'
 }
 
 export interface ConversationInspectInput {
@@ -62,8 +62,8 @@ function currentSegmentOf(results: readonly ExperimentRun[]): number {
   return results.at(-1)?.segment ?? 0
 }
 
-function currentResults(results: readonly ExperimentRun[]): ExperimentRun[] {
-  const segment = currentSegmentOf(results)
+function currentResults(results: readonly ExperimentRun[], segmentOverride?: number): ExperimentRun[] {
+  const segment = segmentOverride ?? currentSegmentOf(results)
   return results.filter((run) => run.segment === segment)
 }
 
@@ -150,7 +150,7 @@ export function buildDashboardModel(
   opts: { running?: boolean; runningCommand?: string | null } = {},
 ): DashboardModel {
   const results = snapshot.results ?? []
-  const current = currentResults(results)
+  const current = currentResults(results, snapshot.currentSegment)
   const keptRuns = current.filter((run) => run.status === 'keep')
   const discarded = current.filter((run) => run.status === 'discard').length
   const crashed = current.filter((run) => run.status === 'crash').length
@@ -199,7 +199,7 @@ export function buildDashboardModel(
     discarded,
     crashed,
     checksFailed,
-    conf: confidenceFor(results, direction),
+    conf: confidenceFor(current, direction),
     metricName,
     baseline: baselineRun && baselineValue !== null && baselineValue !== undefined
       ? { value: formatNum(baselineValue, unit), run: baselineNumber }
@@ -218,7 +218,7 @@ export function buildDashboardModel(
     rows,
     running: opts.running === true,
     runningCommand: opts.runningCommand ?? null,
-    paused: snapshot.manualOff === true,
+    lifecycle: snapshot.active ? 'running' : 'ended',
   }
 }
 
@@ -334,6 +334,7 @@ export function inspectConversation(conv: ConversationInspectInput | null | unde
   })
 
   const kind = progressCardKind({
+    // TypeScript does not model assignments performed by the synchronous walk callback.
     results: (logSnapshot as AutoresearchSnapshot | null)?.results,
     runningExperiment,
     hasRunStarted,
