@@ -221,9 +221,9 @@ const clientStyles = `
     width: 100%;
     min-height: 44px;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto 14px;
     align-items: start;
-    column-gap: 16px;
+    column-gap: 8px;
     row-gap: 5px;
     padding: 11px 0 12px;
     border: 0;
@@ -233,7 +233,7 @@ const clientStyles = `
     cursor: pointer;
     font: inherit;
   }
-  .dsh-ar-history-summary:hover .dsh-ar-history-disclosure { color: ${colors.text}; }
+  .dsh-ar-history-summary:hover .dsh-ar-history-chevron { color: ${colors.text}; }
   .dsh-ar-history-summary:focus-visible,
   .dsh-ar-history-list-toggle:focus-visible {
     outline: 2px solid ${colors.accent};
@@ -241,6 +241,7 @@ const clientStyles = `
     border-radius: 6px;
   }
   .dsh-ar-history-preview {
+    grid-column: 1 / -1;
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 1;
@@ -250,12 +251,15 @@ const clientStyles = `
     line-height: 1.5;
     overflow-wrap: anywhere;
   }
-  .dsh-ar-history-disclosure {
-    align-self: end;
+  .dsh-ar-history-chevron {
+    align-self: center;
+    justify-self: end;
+    width: 14px;
+    height: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: ${colors.muted};
-    font-size: 11px;
-    line-height: 1.5;
-    white-space: nowrap;
   }
   .dsh-ar-history-detail {
     padding: 0 0 14px;
@@ -666,6 +670,7 @@ function ProgressCard({
                 data-autoresearch-expand-run={row.run}
                 aria-expanded={expanded}
                 aria-controls={detailId}
+                aria-label={`${expanded ? '收起' : '展开'}第 ${row.run} 轮详情，${statusLabel(row.status)}，${row.metric}`}
                 onClick={() => setExpandedRun((value) => value === row.run ? null : row.run)}
               >
                 <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, fontSize: 12 }}>
@@ -674,8 +679,12 @@ function ProgressCard({
                   <span style={{ color: statusColor(row.status), fontWeight: 560 }}>{statusLabel(row.status)}</span>
                 </span>
                 <span style={{ fontSize: 13, fontWeight: 620, textAlign: 'right', ...tabular }}>{row.metric}</span>
-                {!expanded ? <span className="dsh-ar-history-preview">{row.description}</span> : <span />}
-                <span className="dsh-ar-history-disclosure">{expanded ? '收起' : '展开'}</span>
+                <span className="dsh-ar-history-chevron" aria-hidden="true" style={{ transform: expanded ? 'rotate(90deg)' : undefined }}>
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path d="M4.5 2.5 8 6l-3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </span>
+                {!expanded ? <span className="dsh-ar-history-preview">{row.description}</span> : null}
               </button>
               {expanded ? (
                 <div id={detailId} className="dsh-ar-history-detail" data-autoresearch-run-detail={row.run}>

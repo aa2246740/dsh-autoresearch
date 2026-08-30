@@ -108,8 +108,8 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 
 ### Experiment row
 
-- Collapsed: run number, localized status, metric, one-line preview, and visible `展开` affordance.
-- Expanded: the complete description and retained version reference when available. Only one row expands at a time.
+- Collapsed: run number and localized status on the left, metric plus a right-pointing disclosure chevron on the same first line, then the one-line preview below. The disclosure never trails the description.
+- Expanded: the chevron points down and the complete description plus retained version reference appears below the row. Only one row expands at a time.
 - `查看全部 N 轮` exposes the complete current-goal history inside the scrollable popover; `只看最近 3 轮` returns to the quiet default.
 - Status copy: `保留`, `未采用`, `运行失败`, `检查未通过`.
 - Rows remain readable with long Chinese descriptions and missing commit ids.
@@ -276,3 +276,4 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 | 0.7 | 2026-08-30 | Reduce the result panel to one outcome, one summary, three recent records, and one quiet action | User found the previous board visually overstuffed and asked for more restrained, disciplined hierarchy | Codex |
 | 0.8 | 2026-08-30 | Accept the restrained 420 px result popover at desktop and 390 px | Pinned-browser critique repaired a hidden-action P1; final render keeps all three recent records and Close visible with zero overflow or runtime errors | Codex |
 | 0.9 | 2026-08-30 | Add progressive disclosure for complete history and row details | User correctly identified that visual truncation without a full-view path sacrificed the monitor's core information job | Codex |
+| 1.0 | 2026-08-30 | Move row disclosure from the description tail to the first-line trailing edge | The previous text affordance looked detached from the record header and competed with the explanation | Codex |
