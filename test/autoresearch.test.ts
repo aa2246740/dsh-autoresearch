@@ -549,6 +549,7 @@ test('client daily chrome has no experiment chip and init form is goal+rounds', 
   const source = fs.readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { dsh: { client: { inject: string[] } } }
   assert.equal(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-sidebar'), false)
+  assert.equal(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-primitives'), true)
   assert.equal(/slots\.inject\(\s*['"]sidebar/.test(source), false)
   assert.equal(/slots\.inject\(\s*['"]shell\.sidebar/.test(source), false)
   assert.equal(/slots\.inject\(\s*['"]shell\.footer/.test(source), false)
@@ -611,6 +612,30 @@ test('progress UI is outcome-first, state-aware, and no longer a terminal table'
   assert.match(source, /data-ud-check="progress-outcome"/)
   assert.match(source, /data-ud-check="experiment-history"/)
   assert.match(source, /data-ud-check="progress-action"/)
+})
+
+test('monitor lives in a collapsed header utility while the composer keeps only the start form', () => {
+  const source = fs.readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  assert.match(source, /conversation\.session\.header\.utilities/)
+  assert.match(source, /id: 'autoresearch-monitor'/)
+  assert.match(source, /order: 60/)
+  assert.match(source, /data-autoresearch="header-trigger"/)
+  assert.match(source, /data-autoresearch="header-panel"/)
+  assert.match(source, /aria-expanded=\{open\}/)
+  assert.match(source, /createPortal\(/)
+  assert.match(source, /useAnchoredPosition\(/)
+  assert.match(source, /document\.body/)
+  assert.match(source, /event\.key !== 'Escape'/)
+  assert.match(source, /triggerRef\.current\?\.focus\(\)/)
+  assert.match(source, /className="dsh-ar-menu"/)
+  assert.match(source, /border: 1px solid \$\{colors\.lineStrong\}/)
+  assert.match(source, /background: \$\{colors\.panel\}/)
+
+  const dock = source.slice(source.indexOf('function AutoresearchDock'), source.indexOf('function SettingsCard'))
+  assert.match(dock, /<InitDockCard/)
+  assert.doesNotMatch(dock, /<ProgressCard/)
+  assert.doesNotMatch(dock, /<RunningCard/)
+  assert.doesNotMatch(dock, /<WaitingCard/)
 })
 
 test('internal finalize and hooks skills stay out of ordinary user autocomplete', () => {

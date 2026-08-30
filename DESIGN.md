@@ -1,7 +1,7 @@
 ---
 version: alpha
-name: Autoresearch Instrument Panel
-description: A quiet, outcome-first experiment monitor for beginner users inside the DSH conversation composer.
+name: Autoresearch Header Monitor
+description: A quiet, outcome-first experiment monitor that stays collapsed in the DSH session header until the user asks to inspect it.
 
 colors:
   primary: "#2F6FED"
@@ -62,7 +62,7 @@ components:
 
 ## Overview
 
-Autoresearch is a compact instrument panel embedded above the DSH composer. Its audience is a beginner who cares about the result, not Git, commits, or internal loop machinery. The visual read is quiet and technical without looking like a terminal: the best result dominates, state and next action are unambiguous, and experiment history remains readable without becoming a spreadsheet.
+Autoresearch is a compact session-header monitor. Its audience is a beginner who cares about the result, not Git, commits, or internal loop machinery. The header keeps one quiet status trigger visible while the result board stays collapsed by default, preserving the transcript as the primary reading surface. When opened, the best result dominates, state and next action are unambiguous, and experiment history remains readable without becoming a spreadsheet.
 
 ## Colors
 
@@ -78,14 +78,15 @@ Autoresearch is a compact instrument panel embedded above the DSH composer. Its 
 
 ## Layout
 
-- One framed progress panel, not cards inside cards.
+- One framed, anchored progress panel opened from the session header, not cards inside cards.
 - Reading order: state and goal, baseline-to-best outcome, run health, recent experiment history, current action.
 - Desktop history rows use a stable grid. Below 640 px they reflow to metric/status metadata above a full-width description; the page must not scroll horizontally at 320 px.
 - Use the 4/8/12/16/24 spacing rhythm. The outcome band may be denser than the history list, but no readable zones may touch.
+- The composer dock is reserved for the explicit new-goal confirmation form. Monitoring, waiting, running, and completed-result states never consume transcript or composer height.
 
 ## Elevation & Depth
 
-- Use the host border and tonal surface to separate the panel. Do not add large soft shadows, glass, gradients, or nested elevated tiles.
+- Use the host menu surface, a visible level-2 border, and the host level-3 menu shadow to separate the anchored panel from the shell. The outcome band uses a second tonal surface plus its own hairline border so it never dissolves into the panel background. Do not add glass, gradients, or nested elevated tiles.
 - Rows are separated by hairlines and whitespace, not individual containers.
 
 ## Shapes
@@ -98,6 +99,8 @@ Autoresearch is a compact instrument panel embedded above the DSH composer. Its 
 ### Progress panel
 
 - Purpose: show what is running, whether the run ended, the measurable outcome, recent experiments, and the single valid next action.
+- Seat: `conversation.session.header.utilities`, after Watcher and before the files utility. The 32 px trigger is collapsed by default and exposes state through text in its accessible name as well as color.
+- Disclosure: click toggles the panel; clicking outside or pressing Escape closes it and returns focus to the trigger. Opening the panel never resizes the conversation or composer.
 - Running state: state label `正在优化`; primary action `暂停`.
 - Ended state: state label `本轮已结束`; action `关闭结果`. Never show `暂停` after the controller is inactive.
 - Dismissal is local to the displayed run. Starting a later goal creates a new run identity and is never suppressed by an earlier dismissal.
@@ -133,20 +136,20 @@ Autoresearch is a compact instrument panel embedded above the DSH composer. Its 
 ## Request Anchor
 
 - Original user request: redesign the ugly state card; replace Pause with Close when the goal is done; support repeated independent Autoresearch goals without retaining the old card; hide the two internal support skills from ordinary users.
-- Latest user override: implement the changes, test them in the formal DSH installation, and keep the workflow beginner-friendly and automatic.
+- Latest user override: the board needs a clearly bounded surface, and monitoring must move into the top session bar like `dsh-watcher`, collapsed by default and expandable without blocking the reading area. Do not modify DSH core.
 - Deliverable: source, tests, built plugin, formal DSH installation, live verification, and publication to `main`.
 - Primary audience: non-technical DSH users who may run several unrelated Autoresearch goals in one project and conversation.
 - Core job to be done: understand the current outcome at a glance and safely start, pause, finish, close, then start another research goal without stale state.
-- Success criteria: completed cards never show Pause; Close dismisses the ended card; a new goal starts a fresh segment and hides the old one immediately; internal finalize/hooks skills do not appear in user autocomplete; the redesigned panel is readable at desktop and narrow widths.
+- Success criteria: completed cards never show Pause; Close dismisses the ended card; a new goal starts a fresh segment and hides the old one immediately; internal finalize/hooks skills do not appear in user autocomplete; the monitoring board occupies no composer/transcript height while closed; header click, outside click, and Escape close work; the open panel has visible border and tonal separation; desktop and narrow views have no clipping or horizontal overflow.
 - Non-goals: redesign the whole DSH shell, expose advanced Git controls, erase the historical `.auto/log.jsonl` ledger, or add decorative motion.
-- Must preserve: automatic local protection, existing experiment data, DSH theme compatibility, same-session continuation safety, and current `/autoresearch` entry point.
+- Must preserve: automatic local protection, existing experiment data, DSH theme compatibility, same-session continuation safety, current `/autoresearch` entry point, and an unmodified DSH core checkout.
 - Validation must check against: the supplied session event order, controller state after `off -> new goal`, card action by active state, repeated-run identity/dismissal, skill invocation visibility, desktop/narrow rendered states, and formal Host/client activation.
 
 ## Content Model
 
 - User intent: see whether the current research improved the project and choose the only sensible next action.
 - Message hierarchy: lifecycle state and goal -> best result vs baseline -> run health -> experiment explanations -> action.
-- First-screen answers: what goal this is, whether it is still running, what changed, and what the user can do next.
+- Collapsed header answers: Autoresearch exists for this session and whether it is running or ended. The open panel answers what goal this is, what changed, and what the user can do next.
 - Primary action meaning: `暂停` stops automatic continuation but preserves results; `关闭结果` only dismisses an already-ended result card.
 - Voice and tone: calm, concise, plain Chinese; technical identifiers are secondary evidence.
 - Terminology rules: use `本轮`, `保留`, `未采用`, `正在优化`, `本轮已结束`, and `关闭结果`; avoid `paused`, `keep`, `discard`, `commit`, and internal skill names as primary copy.
@@ -191,8 +194,8 @@ Autoresearch is a compact instrument panel embedded above the DSH composer. Its 
 | `design-okf/methods/senior-design-process.md` | Define lifecycle and user outcome before visual styling | Controller, dashboard model, this contract | State transition tests precede implementation |
 | `design-okf/content/state-language.md` | Give preparing, running, ended, dismissed states distinct copy and recovery | Progress panel and actions | Copy/source assertions and rendered states |
 | `design-okf/content/semantic-binding.md` | Use native buttons, accessible names, and wrapping critical descriptions | Progress panel JSX | Rendered UI Audit and source review |
-| `design-okf/digital/accessibility-usability.md` | Preserve focus, 44 px actions, textual state parity, and recovery | Buttons and status labels | Keyboard/focus and target-size audit |
-| `design-okf/digital/responsive-interaction.md` | Replace the horizontal table with a reflowing history grid | Experiment history | 320/375/768/1280 screenshots and overflow audit |
+| `design-okf/digital/accessibility-usability.md` | Preserve focus, 44 px actions, textual state parity, Escape dismissal, and focus return | Header trigger, panel, buttons, status labels | Keyboard/focus and target-size audit |
+| `design-okf/digital/responsive-interaction.md` | Use an anchored non-blocking header panel and a reflowing history grid | Header utility and experiment history | 320/375/768/1280 screenshots, closed-height and overflow audit |
 | `design-okf/systems/typography-system.md` | Use system sans for copy and tabular figures for data | Metric rail and rows | Mixed Chinese/English screenshot review |
 | `design-okf/foundations/visual-hierarchy.md` | Make best result the single focal point and demote commit ids | Outcome summary | Critique pass and screenshot review |
 | `design-okf/systems/taste-engine.md` | Use a quiet instrument-panel read and reject terminal-table/card-stack defaults | Entire progress panel | Anti-default critique and rendered review |
@@ -204,7 +207,7 @@ Autoresearch is a compact instrument panel embedded above the DSH composer. Its 
 
 - Core user tasks: read outcome, inspect recent experiments, pause an active loop, close an ended result, start a different goal.
 - Page or screen inventory: start card, preparing line, first-run line, running progress panel, ended progress panel, dismissed state.
-- Navigation model: `/autoresearch` opens a new-start card; progress stays in the composer dock; Close removes only the visible result.
+- Navigation model: `/autoresearch` opens a new-start card in the composer; after confirmation, the header trigger owns waiting/running/results; its panel is collapsed by default; Close removes only the visible ended result.
 - Content hierarchy: state/goal, outcome, health summary, history, action.
 - Primary CTA rules: exactly one primary state action; no Pause when inactive.
 
@@ -214,8 +217,8 @@ Autoresearch is a compact instrument panel embedded above the DSH composer. Its 
 - Necessary judgment: remove the raw table header hierarchy and the invalid Pause action; keep outcome, provenance, and experiment explanations.
 - Taste dials: visual variance 3, information density 7, motion depth 1, brand distinction 4, type expressiveness 2, experiment risk 2.
 - Category defaults avoided: gray terminal slab, nested cards, generic KPI chip grid, decorative gradient, and equal emphasis on every datum.
-- Layout families: outcome rail plus editorial experiment list.
-- Visual memory feature: the baseline-to-best outcome line paired with a calm lifecycle badge.
+- Layout families: compact header utility plus an anchored outcome rail and editorial experiment list.
+- Visual memory feature: a small experiment-flask header glyph that opens the baseline-to-best outcome line and calm lifecycle badge.
 - Type personality: utility-first system sans; tabular numerals provide precision while Chinese explanations stay humane.
 - Asset/reference policy: use only actual experiment data; no illustrative or fake product assets.
 - Anti-default locks: no glass, no gradient, no huge shadow, no monospaced body copy, no horizontal data table on mobile.
@@ -224,10 +227,10 @@ Autoresearch is a compact instrument panel embedded above the DSH composer. Its 
 ## Quality Gates
 
 - Request Anchor fit: all four requested changes are independently tested.
-- Visual: best result is primary; descriptions scan cleanly; no generic table/card-stack appearance.
+- Visual: the panel has a visible boundary and distinct tonal surface; best result is primary; descriptions scan cleanly; no generic table/card-stack appearance.
 - Accessibility: semantic buttons, visible focus, textual state, named close/pause action, >=44 px action height.
-- Responsive: no page-level horizontal overflow at 320 px; history reflows without losing descriptions.
-- Interaction: pause is locked while pending; ended result closes locally; a new goal is not hidden by an old dismissal.
+- Responsive: no page-level horizontal overflow at 320 px; history reflows without losing descriptions; the open panel stays inside a 12 px viewport margin and never covers content while closed.
+- Interaction: header trigger, outside click, and Escape close the panel; focus returns to the trigger; pause is locked while pending; ended result closes locally; a new goal is not hidden by an old dismissal.
 - Motion: static-first; spinner stops under reduced motion.
 - Performance: no polling or new persistent client timer.
 - I18n/legal: mixed Chinese/English wraps; numbers use tabular figures; no external assets or claims.
@@ -235,7 +238,7 @@ Autoresearch is a compact instrument panel embedded above the DSH composer. Its 
 
 ## Implementation And Governance
 
-- CSS architecture: component-local React styles plus one scoped responsive/focus style block; DSH semantic variables remain runtime truth.
+- CSS architecture: component-local React styles plus one scoped responsive/focus style block; the header panel is portaled to `document.body` and positioned with the host anchored-position helper; DSH semantic variables remain runtime truth.
 - Token implementation: constants map to the front-matter roles and host aliases.
 - Component naming: `ProgressCard` with named outcome, history, and state-action zones.
 - State naming: preparing, running, ended, dismissed, and superseded-by-new-goal.
@@ -264,3 +267,5 @@ Autoresearch is a compact instrument panel embedded above the DSH composer. Its 
 |---|---|---|---|---|
 | 0.1 | 2026-08-30 | Initial contract for lifecycle and progress-card redesign | User reported stale state, invalid action, repeat-run failure, and internal-skill exposure | Codex |
 | 0.2 | 2026-08-30 | Accepted outcome-first card in running/ended states at 1180 px and 390 px | Pinned Playwright found four semantic zones, zero overflow/errors, 44 px actions, visible focus, and correct lifecycle copy | Codex |
+| 0.3 | 2026-08-30 | Move monitoring to a collapsed session-header utility and strengthen panel figure/ground | User reported weak boundary contrast and loss of transcript reading space | Codex |
+| 0.4 | 2026-08-30 | Accept the header monitor at 1280 px and 390 px | Same-page pinned-browser verification confirmed 1 px panel/outcome borders, distinct tonal surfaces, 12 px viewport clearance, zero overflow/errors, and keyboard/outside-click dismissal | Codex |

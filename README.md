@@ -52,12 +52,12 @@ dshx start web dsh-autoresearch
 1. 打开官方 Web，进入一个项目会话；用户不需要预先配置 Git。
 2. 在输入框输入 `/autoresearch`，选 **新开一次 Autoresearch**。输入框正上方出现引导卡（不是全屏 overlay，不挡上面的 Agent 输出）。
 3. 卡上只填两件事：目标（自然语言，和 grok-autoresearch 的 `/autoresearch <goal>` 一样）和轮次。不要填主指标、方向、measure.sh。点 **确认并开始** 后，插件会自动保存本地保护点；有 Git 就安全复用，没有 Git、Git 忙碌或项目已有未提交内容时就无感切换到插件自己的文件快照。不会上传代码，也不会要求用户配置 Git。
-4. 确认后 dock 收起（最多留一句「等 agent 在对话里对齐需求」）。此时没有进度卡；agent 可以先在对话里对齐需求。
-5. 第一次 `run_experiment` 才出现一行 `running…`。第一次 `log_experiment` 入账后出现一张人话进度卡（Runs / kept / discarded / Baseline / Progress Δ% / 短表）。没有第二层「更大视图」。
+4. 确认后 composer dock 完全收起；等待、运行和结果监测都进入会话顶部栏，不再占用对话阅读高度。agent 仍可先在对话里对齐需求。
+5. 顶部栏的烧瓶入口默认收起：第一次 `run_experiment` 显示运行状态，第一次 `log_experiment` 入账后可展开人话结果 Board（Runs / kept / discarded / Baseline / Progress Δ% / 最近实验）。再次点击、点击面板外或按 Esc 都能收起；面板使用独立底色和边框，不与页面背景混在一起。
 
-暂停续跑：进度卡上的「暂停」或 `/autoresearch off`。清除账本用 `/autoresearch clear`。
+暂停续跑：展开顶部 Board 后点「暂停」，或输入 `/autoresearch off`。清除账本用 `/autoresearch clear`。
 
-斜杠 `/autoresearch` 会弹出：新开一次 / 继续 / 状态 / 停止 / 清除。进度卡从对话里的 run/log 工具更新，不会把账本 JSON 写进聊天。
+斜杠 `/autoresearch` 会弹出：新开一次 / 继续 / 状态 / 停止 / 清除。顶部 Board 从对话里的 run/log 工具更新，不会把账本 JSON 写进聊天。
 
 ## 账本
 

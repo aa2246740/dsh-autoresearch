@@ -47,6 +47,16 @@ declare module '@deepseek-ai/dsh-client-runtime/client' {
 
 declare module '@deepseek-ai/dsh-client-ui-settings-plugins/client' {}
 declare module '@deepseek-ai/dsh-client-ui-conversation/client' {}
+declare module '@deepseek-ai/dsh-client-ui-primitives' {
+  import type { CSSProperties, RefObject } from 'react'
+  export function useAnchoredPosition(options: {
+    open: boolean
+    anchorRef: RefObject<HTMLElement | null>
+    panelRef: RefObject<HTMLElement | null>
+    gap?: number
+    margin?: number
+  }): CSSProperties | null
+}
 declare module '@deepseek-ai/dsh-client-ui-commands/client' {
   export interface SelectOption {
     id: string
@@ -65,6 +75,11 @@ declare module '@deepseek-ai/dsh-client-ui-commands/client' {
       }
     }) => () => void
   }
+}
+
+declare module 'react-dom' {
+  import type { ReactNode, ReactPortal } from 'react'
+  export function createPortal(children: ReactNode, container: Element | DocumentFragment): ReactPortal
 }
 
 declare module '@deepseek-ai/dsh-session-projection/types' {

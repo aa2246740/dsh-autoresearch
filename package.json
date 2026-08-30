@@ -1,6 +1,6 @@
 {
   "name": "dsh-autoresearch",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Durable auto-research experiment loop for DeepSeek Harness, with create / run / monitor in the official Web GUI.",
   "type": "module",
   "main": "lib/index.js",
@@ -59,6 +59,7 @@
         "@deepseek-ai/dsh-client-ui-layout",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-commands",
+        "@deepseek-ai/dsh-client-ui-primitives",
         "@deepseek-ai/dsh-client-ui-settings-plugins"
       ]
     }

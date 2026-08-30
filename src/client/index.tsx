@@ -1,5 +1,7 @@
-import { useState, useSyncExternalStore, type CSSProperties, type FormEvent } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent } from 'react'
+import { createPortal } from 'react-dom'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import { useAnchoredPosition } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-commands/client'
@@ -80,11 +82,12 @@ interface DockProps {
 
 const colors = {
   bg: 'var(--dsw-alias-bg-layer-1, Canvas)',
-  panel: 'var(--dsw-alias-bg-layer-1, Canvas)',
-  subtle: 'var(--dsw-alias-bg-module-platform, color-mix(in srgb, CanvasText 4%, Canvas))',
+  panel: 'color-mix(in srgb, var(--dsw-alias-label-primary, CanvasText) 2.5%, var(--dsw-alias-bg-layer-1, Canvas))',
+  subtle: 'color-mix(in srgb, var(--dsw-alias-label-primary, CanvasText) 6.5%, var(--dsw-alias-bg-layer-1, Canvas))',
   text: 'var(--dsw-alias-label-primary, CanvasText)',
   muted: 'var(--dsw-alias-label-secondary, GrayText)',
   line: 'var(--dsw-alias-border-l1, var(--dsw-alias-border-l2, ButtonBorder))',
+  lineStrong: 'color-mix(in srgb, var(--dsw-alias-label-primary, CanvasText) 18%, transparent)',
   good: 'var(--dsw-alias-text-success, var(--dsw-alias-state-success-primary, #1a7f37))',
   bad: 'var(--dsw-alias-text-danger, var(--dsw-alias-state-error-primary, #cf222e))',
   accent: 'var(--dsw-alias-button-primary-fill, var(--dsw-alias-state-business-primary, #2f6fed))',
@@ -103,7 +106,7 @@ const dockShell: CSSProperties = {
   width: 'calc(100% - var(--dsh-composer-side-clearance, 0px) * 2 - var(--dsh-composer-dock-inset, 0px) * 4)',
   maxWidth: 'calc(var(--dsh-composer-card-max-width, 960px) - var(--dsh-composer-dock-inset, 0px) * 2)',
   margin: '0 auto',
-  border: `1px solid ${colors.line}`,
+  border: `1px solid ${colors.lineStrong}`,
   borderRadius: 14,
   background: colors.panel,
   padding: 16,
@@ -118,8 +121,83 @@ const tabular: CSSProperties = {
   fontFeatureSettings: '"tnum" 1',
 }
 
+const PANEL_GAP = 8
+const PANEL_MARGIN = 12
+const UNPLACED_PANEL_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
+
 const clientStyles = `
   @keyframes dsh-ar-spin { to { transform: rotate(360deg); } }
+  @keyframes dsh-ar-panel-enter {
+    from { opacity: 0; transform: translateY(-5px) scale(.992); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .dsh-ar-header-root { position: relative; }
+  .dsh-ar-trigger {
+    box-sizing: border-box;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid ${colors.line};
+    border-radius: 999px;
+    background: transparent;
+    color: ${colors.text};
+    cursor: pointer;
+    transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, transform 100ms ease;
+  }
+  .dsh-ar-trigger:hover,
+  .dsh-ar-trigger:focus-visible { background: var(--dsw-alias-interactive-bg-hover, ${colors.subtle}); }
+  .dsh-ar-trigger:active { transform: scale(.96); }
+  .dsh-ar-trigger:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: 2px; }
+  .dsh-ar-trigger[data-open] {
+    border-color: var(--dsw-alias-button-ghost-active-border, ${colors.accent});
+    background: var(--dsw-alias-button-ghost-active-fill, ${colors.subtle});
+  }
+  .dsh-ar-trigger[data-state='running'],
+  .dsh-ar-trigger[data-state='waiting'] { color: ${colors.accent}; }
+  .dsh-ar-trigger[data-state='ended'] { color: ${colors.good}; }
+  .dsh-ar-trigger::after {
+    content: '';
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    width: 6px;
+    height: 6px;
+    border: 1.5px solid ${colors.panel};
+    border-radius: 50%;
+    background: ${colors.muted};
+  }
+  .dsh-ar-trigger[data-state='running']::after { background: ${colors.accent}; }
+  .dsh-ar-trigger[data-state='waiting']::after { background: ${colors.warn}; }
+  .dsh-ar-trigger[data-state='ended']::after { background: ${colors.good}; }
+  .dsh-ar-menu {
+    position: fixed;
+    z-index: 1100;
+    box-sizing: border-box;
+    width: min(560px, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
+    max-height: min(600px, calc(100vh - 24px));
+    overflow: hidden;
+    border: 1px solid ${colors.lineStrong};
+    border-radius: 12px;
+    background: ${colors.panel};
+    box-shadow: var(--dsw-shadow-lv3, 0 16px 42px color-mix(in srgb, CanvasText 18%, transparent));
+    color: ${colors.text};
+    transform-origin: top right;
+    animation: dsh-ar-panel-enter 180ms cubic-bezier(.2, .8, .2, 1);
+    isolation: isolate;
+  }
+  .dsh-ar-panel-scroll {
+    box-sizing: border-box;
+    max-height: min(600px, calc(100vh - 24px));
+    overflow: auto;
+    padding: 16px;
+    overscroll-behavior: contain;
+  }
+  .dsh-ar-compact-panel { min-height: 56px; display: flex; align-items: center; }
   .dsh-ar-button:hover:not(:disabled) { filter: brightness(0.97); }
   .dsh-ar-button:active:not(:disabled) { filter: brightness(0.93); }
   .dsh-ar-button:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: 2px; }
@@ -133,6 +211,7 @@ const clientStyles = `
   }
   .dsh-ar-history-row:first-child { border-top: 0; }
   @media (max-width: 640px) {
+    .dsh-ar-panel-scroll { padding: 14px; }
     .dsh-ar-history-row {
       grid-template-columns: 30px minmax(72px, 1fr) minmax(84px, auto);
       gap: 8px;
@@ -142,6 +221,7 @@ const clientStyles = `
   }
   @media (prefers-reduced-motion: reduce) {
     [data-autoresearch-spinner] { animation: none !important; }
+    .dsh-ar-menu { animation: none !important; }
   }
 `
 
@@ -217,6 +297,17 @@ function Spinner() {
         verticalAlign: 'middle',
       }}
     />
+  )
+}
+
+function AutoresearchIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M7 2.75h6M8.25 3v4.4l-4.1 7.05A1.85 1.85 0 0 0 5.75 17h8.5a1.85 1.85 0 0 0 1.6-2.55L11.75 7.4V3" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6.15 12h7.7" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" />
+      <circle cx="8.15" cy="14.35" r=".7" fill="currentColor" />
+      <circle cx="11.65" cy="13.55" r=".55" fill="currentColor" />
+    </svg>
   )
 }
 
@@ -412,6 +503,7 @@ function ProgressCard({
           gap: 16,
           flexWrap: 'wrap',
           padding: '14px 16px',
+          border: `1px solid ${colors.lineStrong}`,
           borderRadius: 8,
           background: colors.subtle,
         }}
@@ -502,7 +594,7 @@ function ProgressCard({
   )
 }
 
-function AutoresearchDock({ ctx, sessionId, useSession, useProjection, session }: DockProps & { ctx: AnyCtx }) {
+function AutoresearchHeaderUtility({ ctx, sessionId, useSession, useProjection, session }: DockProps & { ctx: AnyCtx }) {
   const lab = useLab()
   rememberSession(sessionId)
   const live = useSession ? useSession((snapshot) => snapshot) : session
@@ -515,51 +607,132 @@ function AutoresearchDock({ ctx, sessionId, useSession, useProjection, session }
     running: progress.runningExperiment,
     runningCommand: progress.runningCommand,
   }) : null
-
-  if (lab.dock === 'init') {
-    return (
-      <div data-autoresearch="dock" style={dockShell}>
-        <InitDockCard ctx={ctx} sessionId={sessionId} previousSnapshot={snapshot} />
-      </div>
-    )
-  }
-
-  if (snapshot && isProgressDismissed(snapshot)) return null
-
   const superseded = Boolean(
     lab.dock === 'waiting'
     && lab.supersededProgressKey
     && snapshot
     && progressIdentity(snapshot) === lab.supersededProgressKey,
   )
-  if (superseded) {
-    return (
-      <div data-autoresearch="dock" style={dockShell}>
-        <WaitingCard />
-      </div>
-    )
-  }
+  const showBoard = !superseded && progress.kind === 'board' && snapshot !== null && model !== null && model.runs > 0
+  const showRunning = !showBoard && !superseded && progress.kind === 'running'
+  const showWaiting = !showBoard && !showRunning && (
+    lab.dock === 'waiting'
+    || superseded
+    || Boolean(snapshot?.active && (model?.runs ?? 0) === 0)
+  )
+  const dismissed = snapshot !== null && isProgressDismissed(snapshot)
+  const visible = lab.dock !== 'init' && !dismissed && (showBoard || showRunning || showWaiting)
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const panelPosition = useAnchoredPosition({
+    open,
+    anchorRef: triggerRef,
+    panelRef,
+    gap: PANEL_GAP,
+    margin: PANEL_MARGIN,
+  })
 
-  if (progress.kind === 'board' && snapshot && model && model.runs > 0) {
-    return (
-      <div data-autoresearch="dock" style={dockShell}>
-        <ProgressCard model={model} snapshot={snapshot} ctx={ctx} sessionId={sessionId} />
-      </div>
-    )
-  }
+  useEffect(() => setOpen(false), [sessionId])
+  useEffect(() => {
+    if (visible) return
+    setOpen(false)
+  }, [visible])
 
-  if (progress.kind === 'running') {
-    return (
-      <div data-autoresearch="dock" style={dockShell}>
-        <RunningCard name={projected?.name ?? snapshot?.name ?? null} command={progress.runningCommand} />
-      </div>
-    )
-  }
+  useEffect(() => {
+    if (!open) return
+    const closeOutside = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return
+      if (rootRef.current?.contains(event.target) === true) return
+      if (panelRef.current?.contains(event.target) === true) return
+      setOpen(false)
+    }
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+    document.addEventListener('pointerdown', closeOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
 
-  if (lab.dock === 'waiting') {
+  if (!visible) return null
+
+  const monitorState = showBoard && model?.lifecycle === 'ended'
+    ? 'ended'
+    : showWaiting
+      ? 'waiting'
+      : 'running'
+  const stateLabel = monitorState === 'ended'
+    ? '本轮已结束'
+    : monitorState === 'waiting'
+      ? '正在准备新目标'
+      : '正在优化'
+  const goalLabel = model?.name ?? projected?.name ?? snapshot?.name ?? null
+
+  return (
+    <div ref={rootRef} className="dsh-ar-header-root" data-autoresearch="header-utility">
+      <style>{clientStyles}</style>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="dsh-ar-trigger"
+        data-autoresearch="header-trigger"
+        data-open={open ? '' : undefined}
+        data-state={monitorState}
+        aria-expanded={open}
+        aria-label={`Autoresearch，${stateLabel}${goalLabel ? `，${goalLabel}` : ''}`}
+        title={`Autoresearch · ${stateLabel}`}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <AutoresearchIcon />
+      </button>
+
+      {open
+        ? createPortal(
+          <div
+            ref={panelRef}
+            className="dsh-ar-menu"
+            style={panelPosition ?? UNPLACED_PANEL_STYLE}
+            role="dialog"
+            aria-modal="false"
+            aria-label="Autoresearch 监测面板"
+            data-autoresearch="header-panel"
+          >
+            <div className={`dsh-ar-panel-scroll${showBoard ? '' : ' dsh-ar-compact-panel'}`}>
+              {showBoard && model && snapshot
+                ? <ProgressCard model={model} snapshot={snapshot} ctx={ctx} sessionId={sessionId} />
+                : showRunning
+                  ? <RunningCard name={projected?.name ?? snapshot?.name ?? null} command={progress.runningCommand} />
+                  : <WaitingCard />}
+            </div>
+          </div>,
+          document.body,
+        )
+        : null}
+    </div>
+  )
+}
+
+function AutoresearchDock({ ctx, sessionId, useSession, useProjection, session }: DockProps & { ctx: AnyCtx }) {
+  const lab = useLab()
+  rememberSession(sessionId)
+  const live = useSession ? useSession((snapshot) => snapshot) : session
+  const projected = snapshotFromMeta(typeof useProjection === 'function' ? useProjection('autoresearch') : undefined)
+  const progress = inspectConversation(live ?? { runningCalls: [], nodes: [] })
+  const snapshot = progress.kind === 'board'
+    ? preferLedgerSnapshot(progress.snapshot, projected) ?? progress.snapshot
+    : progress.snapshot
+  if (lab.dock === 'init') {
     return (
       <div data-autoresearch="dock" style={dockShell}>
-        <WaitingCard />
+        <InitDockCard ctx={ctx} sessionId={sessionId} previousSnapshot={snapshot} />
       </div>
     )
   }
@@ -606,6 +779,13 @@ function SettingsCard({ scope }: { scope: SettingsScope }) {
 }
 
 export function apply(ctx: AnyCtx): void {
+  ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
+    name: 'conversation.session.header.utilities',
+    id: 'autoresearch-monitor',
+    order: 60,
+    label: 'Autoresearch',
+  }, (props: DockProps) => <AutoresearchHeaderUtility ctx={ctx} {...props} />))
+
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
     name: 'conversation.input.dock',
     id: 'autoresearch',
