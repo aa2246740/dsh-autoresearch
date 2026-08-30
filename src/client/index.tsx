@@ -21,10 +21,8 @@ import {
   applyCommandAcknowledgement,
   buildStartLine,
   cancelInitDock,
-  dismissProgress,
   friendlyStartError,
   hideAfterConfirm,
-  isProgressDismissed,
   parseRoundBudget,
   patchLab,
   progressIdentity,
@@ -705,21 +703,21 @@ function ProgressCard({
         </div>
       ) : null}
       {lab.error ? <div role="alert" style={{ color: colors.bad, fontSize: 12, whiteSpace: 'pre-wrap' }}>{lab.error}</div> : null}
-      <div
-        data-ud-check="progress-action"
-        data-ud-role="panel"
-        style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', minHeight: 44, paddingTop: 10, borderTop: `1px solid ${colors.line}` }}
-      >
-        {model.lifecycle === 'awaiting_user' ? (
-          <span style={{ color: colors.muted, fontSize: 12 }}>请在对话中的确认卡拍板</span>
-        ) : terminal ? (
-          <LabButton ariaLabel="关闭本轮结果" onClick={() => dismissProgress(snapshot)}>关闭</LabButton>
-        ) : (
-          <LabButton disabled={!sessionId || lab.busy} onClick={() => void onPause()}>
-            {lab.busy ? '正在暂停…' : '暂停'}
-          </LabButton>
-        )}
-      </div>
+      {model.lifecycle === 'awaiting_user' || !terminal ? (
+        <div
+          data-ud-check="progress-action"
+          data-ud-role="panel"
+          style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', minHeight: 44, paddingTop: 10, borderTop: `1px solid ${colors.line}` }}
+        >
+          {model.lifecycle === 'awaiting_user' ? (
+            <span style={{ color: colors.muted, fontSize: 12 }}>请在对话中的确认卡拍板</span>
+          ) : (
+            <LabButton disabled={!sessionId || lab.busy} onClick={() => void onPause()}>
+              {lab.busy ? '正在暂停…' : '暂停'}
+            </LabButton>
+          )}
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -756,8 +754,7 @@ function AutoresearchHeaderUtility({ ctx, sessionId, useSession, useProjection, 
     || superseded
     || Boolean(snapshot?.active && (model?.runs ?? 0) === 0)
   )
-  const dismissed = snapshot !== null && isProgressDismissed(snapshot)
-  const visible = lab.dock !== 'init' && !dismissed && (showBoard || showRunning || showWaiting)
+  const visible = lab.dock !== 'init' && (showBoard || showRunning || showWaiting)
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)

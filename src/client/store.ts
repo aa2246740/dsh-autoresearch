@@ -34,7 +34,6 @@ export interface LabState {
   error: string | null
   busy: boolean
   notice: string | null
-  dismissedProgressKey: string | null
   /** Previous rendered result hidden while an explicit new goal is preparing. */
   supersededProgressKey: string | null
   /** Immediate authoritative acknowledgement from this browser's slash command. */
@@ -51,7 +50,6 @@ const initial: LabState = {
   error: null,
   busy: false,
   notice: null,
-  dismissedProgressKey: null,
   supersededProgressKey: null,
   commandAck: null,
 }
@@ -119,7 +117,7 @@ export function cancelInitDock(): void {
 
 export function rememberSession(sessionId: string): void {
   if (state.sessionId === sessionId) return
-  patchLab({ sessionId, dismissedProgressKey: null, supersededProgressKey: null, commandAck: null })
+  patchLab({ sessionId, supersededProgressKey: null, commandAck: null })
 }
 
 /**
@@ -173,15 +171,6 @@ export function progressIdentity(snapshot: AutoresearchSnapshot): string {
   const segment = snapshot.currentSegment ?? snapshot.results.at(-1)?.segment ?? 0
   const epoch = snapshot.sessionEpoch ?? 0
   return [snapshot.workDir, epoch, segment, snapshot.name ?? snapshot.goal ?? 'autoresearch'].join('::')
-}
-
-/** Dismiss only this rendered result; a later explicit goal has a new epoch. */
-export function dismissProgress(snapshot: AutoresearchSnapshot): void {
-  patchLab({ dismissedProgressKey: progressIdentity(snapshot), error: null })
-}
-
-export function isProgressDismissed(snapshot: AutoresearchSnapshot): boolean {
-  return state.dismissedProgressKey === progressIdentity(snapshot)
 }
 
 /**

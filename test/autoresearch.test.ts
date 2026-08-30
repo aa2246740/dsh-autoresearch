@@ -33,12 +33,10 @@ import {
   applyCommandAcknowledgement,
   buildStartLine,
   cancelInitDock,
-  dismissProgress,
   emptyDraft,
   friendlyStartError,
   getLabState,
   hideAfterConfirm,
-  isProgressDismissed,
   parseRoundBudget,
   progressIdentity,
   recordCommandAcknowledgement,
@@ -758,7 +756,7 @@ test('dashboard preserves completed and awaiting-user lifecycle truth', () => {
   assert.equal(buildDashboardModel(awaiting).lifecycle, 'awaiting_user')
 })
 
-test('closing a result dismisses only that goal identity', () => {
+test('a completed result stays addressable until a new goal supersedes its identity', () => {
   resetLab()
   const ended = emptySnapshot({
     sessionEpoch: 4,
@@ -768,9 +766,9 @@ test('closing a result dismisses only that goal identity', () => {
   })
   const next = emptySnapshot({ ...ended, sessionEpoch: 5, currentSegment: 3, name: 'another goal' })
   assert.notEqual(progressIdentity(ended), progressIdentity(next))
-  dismissProgress(ended)
-  assert.equal(isProgressDismissed(ended), true)
-  assert.equal(isProgressDismissed(next), false)
+  assert.equal('dismissedProgressKey' in getLabState(), false)
+  hideAfterConfirm(progressIdentity(ended))
+  assert.equal(getLabState().supersededProgressKey, progressIdentity(ended))
 })
 
 test('formatNum glues short units and spaces longer ones', () => {
@@ -839,8 +837,10 @@ test('GUI drops overlay, status polling, and STATE_V1 chat dumps', () => {
 test('progress UI is outcome-first, state-aware, and no longer a terminal table', () => {
   const source = fs.readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
   assert.match(source, /本轮已结束/)
-  assert.match(source, />关闭<\/LabButton>/)
-  assert.match(source, /ariaLabel="关闭本轮结果"/)
+  assert.doesNotMatch(source, />关闭<\/LabButton>/)
+  assert.doesNotMatch(source, /关闭本轮结果/)
+  assert.doesNotMatch(source, /dismissProgress|isProgressDismissed|dismissedProgressKey/)
+  assert.match(source, /model\.lifecycle === 'awaiting_user' \|\| !terminal/)
   assert.match(source, /正在优化/)
   assert.doesNotMatch(source, /<table/)
   assert.match(source, /data-autoresearch="history-list-toggle"/)
