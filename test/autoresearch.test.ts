@@ -839,13 +839,39 @@ test('GUI drops overlay, status polling, and STATE_V1 chat dumps', () => {
 test('progress UI is outcome-first, state-aware, and no longer a terminal table', () => {
   const source = fs.readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
   assert.match(source, /本轮已结束/)
-  assert.match(source, /关闭结果/)
+  assert.match(source, />关闭<\/LabButton>/)
+  assert.match(source, /ariaLabel="关闭本轮结果"/)
   assert.match(source, /正在优化/)
   assert.doesNotMatch(source, /<table/)
+  assert.doesNotMatch(source, /版本 \{row\.commit\}/)
+  assert.match(source, /最近记录/)
+  assert.match(source, /width: min\(420px/)
+  assert.match(source, /-webkit-line-clamp: 1/)
   assert.match(source, /data-ud-check="progress-header"/)
   assert.match(source, /data-ud-check="progress-outcome"/)
   assert.match(source, /data-ud-check="experiment-history"/)
   assert.match(source, /data-ud-check="progress-action"/)
+})
+
+test('dashboard keeps the monitor concise without deleting the full ledger', () => {
+  const source = fs.readFileSync(new URL('../src/client/dashboard.ts', import.meta.url), 'utf8')
+  assert.match(source, /const TABLE_ROWS = 3/)
+
+  const snapshot = emptySnapshot({
+    results: Array.from({ length: 7 }, (_, index) => sampleRun({
+      run: index + 1,
+      segment: 0,
+      status: index % 2 === 0 ? 'keep' as const : 'discard' as const,
+      metric: 100 + index,
+      commit: index % 2 === 0 ? `abc000${index}` : '',
+      description: `experiment ${index + 1}`,
+    })),
+    currentSegmentRuns: 7,
+    totalRuns: 7,
+  })
+  const model = buildDashboardModel(snapshot)
+  assert.deepEqual(model.rows.map((row) => row.run), [5, 6, 7])
+  assert.equal(snapshot.results.length, 7)
 })
 
 test('monitor lives in a collapsed header utility while the composer keeps only the start form', () => {

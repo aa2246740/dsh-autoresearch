@@ -188,14 +188,14 @@ const clientStyles = `
     position: fixed;
     z-index: 1100;
     box-sizing: border-box;
-    width: min(560px, calc(100vw - 24px));
+    width: min(420px, calc(100vw - 24px));
     max-width: calc(100vw - 24px);
-    max-height: min(600px, calc(100vh - 24px));
+    max-height: min(540px, calc(100vh - 24px));
     overflow: hidden;
     border: 1px solid ${colors.lineStrong};
-    border-radius: 12px;
+    border-radius: 14px;
     background: ${colors.panel};
-    box-shadow: var(--dsw-shadow-lv3, 0 16px 42px color-mix(in srgb, CanvasText 18%, transparent));
+    box-shadow: var(--dsw-shadow-lv3, 0 12px 32px color-mix(in srgb, CanvasText 14%, transparent));
     color: ${colors.text};
     transform-origin: top right;
     animation: dsh-ar-panel-enter 180ms cubic-bezier(.2, .8, .2, 1);
@@ -203,9 +203,9 @@ const clientStyles = `
   }
   .dsh-ar-panel-scroll {
     box-sizing: border-box;
-    max-height: min(600px, calc(100vh - 24px));
+    max-height: min(540px, calc(100vh - 24px));
     overflow: auto;
-    padding: 16px;
+    padding: 20px 20px 14px;
     overscroll-behavior: contain;
   }
   .dsh-ar-compact-panel { min-height: 56px; display: flex; align-items: center; }
@@ -214,21 +214,23 @@ const clientStyles = `
   .dsh-ar-button:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: 2px; }
   .dsh-ar-history-row {
     display: grid;
-    grid-template-columns: 34px minmax(72px, 0.7fr) minmax(88px, 0.75fr) minmax(0, 4fr);
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: start;
-    gap: 12px;
-    padding: 12px 0;
+    column-gap: 16px;
+    row-gap: 5px;
+    padding: 11px 0 12px;
     border-top: 1px solid ${colors.line};
   }
   .dsh-ar-history-row:first-child { border-top: 0; }
+  .dsh-ar-history-description {
+    grid-column: 1 / -1;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+    overflow: hidden;
+  }
   @media (max-width: 640px) {
-    .dsh-ar-panel-scroll { padding: 14px; }
-    .dsh-ar-history-row {
-      grid-template-columns: 30px minmax(72px, 1fr) minmax(84px, auto);
-      gap: 8px;
-    }
-    .dsh-ar-history-description { grid-column: 2 / -1; }
-    .dsh-ar-outcome { align-items: flex-start !important; }
+    .dsh-ar-panel-scroll { padding: 18px 18px 12px; }
   }
   @media (prefers-reduced-motion: reduce) {
     [data-autoresearch-spinner] { animation: none !important; }
@@ -258,7 +260,7 @@ function statusColor(status: ExperimentStatus): string {
   return colors.bad
 }
 
-function LabButton(props: { children: string; onClick?: () => void; kind?: 'primary' | 'ghost' | 'danger'; disabled?: boolean; type?: 'button' | 'submit' }) {
+function LabButton(props: { children: string; onClick?: () => void; kind?: 'primary' | 'ghost' | 'danger'; disabled?: boolean; type?: 'button' | 'submit'; ariaLabel?: string }) {
   const kind = props.kind ?? 'ghost'
   const background = kind === 'primary' ? colors.accent : 'transparent'
   const color = kind === 'primary' ? colors.onAccent : kind === 'danger' ? colors.bad : colors.text
@@ -267,6 +269,7 @@ function LabButton(props: { children: string; onClick?: () => void; kind?: 'prim
     <button
       className="dsh-ar-button"
       type={props.type ?? 'button'}
+      aria-label={props.ariaLabel}
       disabled={props.disabled}
       onClick={props.onClick}
       style={{
@@ -475,6 +478,7 @@ function ProgressCard({
           : model.running
             ? '正在执行'
             : '循环已开启'
+  const issueCount = model.crashed + model.checksFailed
 
   async function onPause(): Promise<void> {
     if (!sessionId || lab.busy) return
@@ -488,16 +492,16 @@ function ProgressCard({
   }
 
   return (
-    <section data-autoresearch="progress-card" aria-label="Autoresearch 结果" style={{ display: 'grid', gap: 16, fontSize: 14 }}>
+    <section data-autoresearch="progress-card" aria-label="Autoresearch 结果" style={{ display: 'grid', gap: 0, fontSize: 14 }}>
       <style>{clientStyles}</style>
       <header
         data-ud-check="progress-header"
         data-ud-role="title"
-        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}
       >
         <div style={{ minWidth: 0 }}>
-          <div style={{ color: colors.muted, fontSize: 12, marginBottom: 3 }}>Autoresearch</div>
-          <div data-autoresearch="progress-title" style={{ fontSize: 18, lineHeight: 1.3, fontWeight: 650, overflowWrap: 'anywhere' }}>
+          <div style={{ color: colors.muted, fontSize: 12, marginBottom: 4 }}>Autoresearch</div>
+          <div data-autoresearch="progress-title" style={{ fontSize: 17, lineHeight: 1.3, fontWeight: 620, overflowWrap: 'anywhere' }}>
             {model.name ?? '未命名目标'}
           </div>
         </div>
@@ -506,16 +510,15 @@ function ProgressCard({
           style={{
             display: 'inline-flex',
             alignItems: 'center',
-            gap: 7,
+            flex: '0 0 auto',
+            gap: 6,
             color: stateTone,
-            background: `color-mix(in srgb, ${stateTone} 10%, transparent)`,
-            borderRadius: 9999,
-            padding: '6px 10px',
+            paddingTop: 2,
             fontSize: 12,
-            fontWeight: 600,
+            fontWeight: 560,
           }}
         >
-          <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: '50%', background: stateTone }} />
+          <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: '50%', background: stateTone }} />
           {stateLabel}
         </div>
       </header>
@@ -527,6 +530,7 @@ function ProgressCard({
           style={{
             display: 'grid',
             gap: 5,
+            marginTop: 16,
             padding: '12px 14px',
             border: `1px solid color-mix(in srgb, ${colors.warn} 45%, transparent)`,
             borderRadius: 8,
@@ -539,67 +543,43 @@ function ProgressCard({
         </div>
       ) : null}
 
-      <div
+      <section
         className="dsh-ar-outcome"
         data-ud-check="progress-outcome"
         data-ud-role="panel"
         style={{
-          display: 'flex',
-          alignItems: 'flex-end',
-          justifyContent: 'space-between',
-          gap: 16,
-          flexWrap: 'wrap',
-          padding: '14px 16px',
-          border: `1px solid ${colors.lineStrong}`,
-          borderRadius: 8,
-          background: colors.subtle,
+          padding: '24px 0 20px',
+          borderBottom: `1px solid ${colors.line}`,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', ...tabular }}>
-          <div>
-            <div style={{ color: colors.muted, fontSize: 11, marginBottom: 2 }}>基线 · {model.metricName}</div>
-            <div data-autoresearch="baseline" style={{ color: colors.muted, fontSize: 16, fontWeight: 550 }}>
-              {model.baseline?.value ?? '—'}
-            </div>
-          </div>
-          <span aria-hidden="true" style={{ color: colors.muted, fontSize: 18 }}>→</span>
-          <div>
-            <div style={{ color: colors.muted, fontSize: 11, marginBottom: 2 }}>当前最佳</div>
-            <div data-autoresearch="progress-best" style={{ color: model.progress ? colors.text : colors.muted, fontSize: 26, lineHeight: 1, fontWeight: 700 }}>
-              {model.progress?.value ?? '—'}
-            </div>
-          </div>
-          {progressDelta ? (
-            <span data-autoresearch="delta" style={{ color: deltaTone, fontWeight: 650, fontSize: 14 }}>
-              {progressDelta}
-            </span>
-          ) : null}
+        <div style={{ color: colors.muted, fontSize: 12, marginBottom: 7 }}>
+          当前最佳 · {model.metricName}
         </div>
-        <div style={{ color: colors.muted, fontSize: 12, lineHeight: 1.6, ...tabular }}>
-          <span>本轮 {model.runs}</span>
-          <span data-autoresearch="kept"> · 保留 {model.kept}</span>
-          {model.discarded > 0 ? <span data-autoresearch="discarded"> · 未采用 {model.discarded}</span> : null}
-          {model.crashed > 0 ? <span style={{ color: colors.bad }}> · 失败 {model.crashed}</span> : null}
-          {model.checksFailed > 0 ? <span style={{ color: colors.bad }}> · 检查未过 {model.checksFailed}</span> : null}
-          {model.conf !== null ? <span data-autoresearch="conf"> · 可信度 {model.conf.toFixed(1)}×</span> : null}
+        <div
+          data-autoresearch="progress-best"
+          style={{ color: model.progress ? colors.text : colors.muted, fontSize: 32, lineHeight: 1.05, fontWeight: 650, ...tabular }}
+        >
+          {model.progress?.value ?? '—'}
         </div>
-      </div>
+        <div style={{ color: colors.muted, fontSize: 12, lineHeight: 1.55, marginTop: 8, ...tabular }}>
+          <span data-autoresearch="baseline">基线 {model.baseline?.value ?? '—'}</span>
+          {progressDelta ? <span data-autoresearch="delta" style={{ color: deltaTone }}>{` · ${progressDelta}`}</span> : null}
+          {model.progress ? <span>{` · 第 ${model.progress.run} 轮`}</span> : null}
+        </div>
+        <div style={{ color: colors.muted, fontSize: 12, lineHeight: 1.55, marginTop: 12, display: 'flex', gap: '5px 14px', flexWrap: 'wrap', ...tabular }}>
+          <span>本轮 {model.runs} 轮</span>
+          <span data-autoresearch="kept">保留 {model.kept} 次</span>
+          {model.conf !== null ? <span data-autoresearch="conf">可信度 {model.conf.toFixed(1)}×</span> : null}
+          {issueCount > 0 ? <span style={{ color: colors.bad }}>{issueCount} 次未通过</span> : null}
+        </div>
+      </section>
 
-      {model.secondaries.length > 0 ? (
-        <div style={{ color: colors.muted, fontSize: 12, display: 'flex', gap: 12, flexWrap: 'wrap', ...tabular }}>
-          {model.secondaries.map((item) => {
-            const delta = formatDeltaPct(item.deltaPct)
-            return <span key={item.name}>{item.name} {item.value}{delta ? ` · ${delta}` : ''}</span>
-          })}
+      <section data-ud-check="experiment-history" data-ud-role="panel" style={{ paddingTop: 18 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 2 }}>
+          <div style={{ fontSize: 13, fontWeight: 620 }}>最近记录</div>
+          <div style={{ color: colors.muted, fontSize: 11, ...tabular }}>{model.rows.length} / {model.runs}</div>
         </div>
-      ) : null}
-
-      <div data-ud-check="experiment-history" data-ud-role="panel">
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 3 }}>
-          <div style={{ fontWeight: 650 }}>最近实验</div>
-          <div style={{ color: colors.muted, fontSize: 12 }}>显示最近 {model.rows.length} 轮</div>
-        </div>
-        <ol aria-label="最近实验" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+        <ol aria-label="最近记录" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
           {model.rows.map((row) => (
             <li
               className="dsh-ar-history-row"
@@ -607,32 +587,36 @@ function ProgressCard({
               data-autoresearch-run={row.run}
               data-autoresearch-status={row.status}
             >
-              <div aria-label={`第 ${row.run} 轮`} style={{ color: colors.muted, fontSize: 12, paddingTop: 3, ...tabular }}>#{row.run}</div>
-              <div style={{ color: statusColor(row.status), fontSize: 12, fontWeight: 650, paddingTop: 3 }}>
-                {statusLabel(row.status)}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, fontSize: 12 }}>
+                <span aria-label={`第 ${row.run} 轮`} style={{ color: colors.muted, ...tabular }}>#{row.run}</span>
+                <span aria-hidden="true" style={{ width: 5, height: 5, borderRadius: '50%', background: statusColor(row.status) }} />
+                <span style={{ color: statusColor(row.status), fontWeight: 560 }}>{statusLabel(row.status)}</span>
               </div>
-              <div style={{ fontSize: 14, fontWeight: 650, paddingTop: 1, ...tabular }}>{row.metric}</div>
-              <div className="dsh-ar-history-description" style={{ minWidth: 0, lineHeight: 1.55, overflowWrap: 'anywhere' }}>
-                <div>{row.description}</div>
-                {row.commit !== '—' ? <div style={{ ...mono, color: colors.muted, fontSize: 11, marginTop: 3 }}>版本 {row.commit}</div> : null}
+              <div style={{ fontSize: 13, fontWeight: 620, textAlign: 'right', ...tabular }}>{row.metric}</div>
+              <div className="dsh-ar-history-description" style={{ minWidth: 0, color: colors.muted, fontSize: 13, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
+                {row.description}
               </div>
             </li>
           ))}
         </ol>
-      </div>
+      </section>
 
       {model.running ? (
-        <div data-autoresearch="running-line" role="status" style={{ color: colors.muted, fontSize: 12 }}>
+        <div data-autoresearch="running-line" role="status" style={{ color: colors.muted, fontSize: 12, padding: '10px 0' }}>
           <Spinner />
           正在执行当前实验{model.runningCommand ? <span style={mono}>{` · ${model.runningCommand}`}</span> : null}
         </div>
       ) : null}
       {lab.error ? <div role="alert" style={{ color: colors.bad, fontSize: 12, whiteSpace: 'pre-wrap' }}>{lab.error}</div> : null}
-      <div data-ud-check="progress-action" data-ud-role="panel" style={{ display: 'flex', justifyContent: 'flex-end' }}>
+      <div
+        data-ud-check="progress-action"
+        data-ud-role="panel"
+        style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', minHeight: 44, paddingTop: 10, borderTop: `1px solid ${colors.line}` }}
+      >
         {model.lifecycle === 'awaiting_user' ? (
           <span style={{ color: colors.muted, fontSize: 12 }}>请在对话中的确认卡拍板</span>
         ) : terminal ? (
-          <LabButton kind="primary" onClick={() => dismissProgress(snapshot)}>关闭结果</LabButton>
+          <LabButton ariaLabel="关闭本轮结果" onClick={() => dismissProgress(snapshot)}>关闭</LabButton>
         ) : (
           <LabButton disabled={!sessionId || lab.busy} onClick={() => void onPause()}>
             {lab.busy ? '正在暂停…' : '暂停'}

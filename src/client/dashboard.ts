@@ -52,7 +52,7 @@ export interface ConversationProgress {
 
 const RUN_TOOL = 'autoresearch_run_experiment'
 const LOG_TOOL = 'autoresearch_log_experiment'
-const TABLE_ROWS = 6
+const TABLE_ROWS = 3
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)

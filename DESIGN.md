@@ -62,7 +62,7 @@ components:
 
 ## Overview
 
-Autoresearch is a compact session-header monitor. Its audience is a beginner who cares about the result, not Git, commits, or internal loop machinery. The header keeps one quiet status trigger visible while the result board stays collapsed by default, preserving the transcript as the primary reading surface. When opened, the best result dominates, state and next action are unambiguous, and experiment history remains readable without becoming a spreadsheet.
+Autoresearch is a compact session-header monitor. Its audience is a beginner who cares about the result, not Git, commits, or internal loop machinery. The header keeps one quiet status trigger visible while the result board stays collapsed by default, preserving the transcript as the primary reading surface. When opened, the panel behaves like a restrained utility popover: one result, one summary, three recent proof points, and one valid action.
 
 ## Colors
 
@@ -74,25 +74,25 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 
 - Use the host system sans stack for all user-facing copy and mixed Chinese/English descriptions.
 - Use tabular figures for metrics, deltas, run numbers, and confidence. Monospace is limited to short commit references and commands.
-- Descriptions wrap in full. Do not truncate the experiment explanation or rely on hover for critical meaning.
+- The monitor clamps recent descriptions to one line because it is a summary surface; the complete experiment explanation remains in the durable ledger and conversation. Critical lifecycle and result meaning never truncates or relies on hover.
 
 ## Layout
 
 - One framed, anchored progress panel opened from the session header, not cards inside cards.
-- Reading order: state and goal, baseline-to-best outcome, run health, recent experiment history, current action.
-- Desktop history rows use a stable grid. Below 640 px they reflow to metric/status metadata above a full-width description; the page must not scroll horizontally at 320 px.
+- Reading order: state and goal, current best result, one-line run summary, three recent records, current action.
+- History rows use a quiet two-column metadata line with the description below. The panel must not scroll horizontally at 320 px.
 - Use the 4/8/12/16/24 spacing rhythm. The outcome band may be denser than the history list, but no readable zones may touch.
 - The composer dock is reserved for the explicit new-goal confirmation form. Monitoring, waiting, running, and completed-result states never consume transcript or composer height.
 
 ## Elevation & Depth
 
-- Use the host menu surface, a visible level-2 border, and the host level-3 menu shadow to separate the anchored panel from the shell. The outcome band uses a second tonal surface plus its own hairline border so it never dissolves into the panel background. Do not add glass, gradients, or nested elevated tiles.
+- Use the host menu surface, one visible level-2 border, and a restrained shadow to separate the anchored panel from the shell. Inside, use whitespace and hairline dividers rather than nested boxes. Do not add glass, gradients, or nested elevated tiles.
 - Rows are separated by hairlines and whitespace, not individual containers.
 
 ## Shapes
 
-- The outer panel uses `rounded.lg`; controls use `rounded.md`; status chips alone may use `rounded.full` because they encode a compact semantic state.
-- Do not turn every count or metric into a pill.
+- The outer panel uses `rounded.lg`; controls use `rounded.md`; the lifecycle indicator is plain text plus a small semantic dot, not a pill.
+- Do not turn counts, metrics, or states into decorative capsules.
 
 ## Components
 
@@ -102,13 +102,13 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 - Seat: `conversation.session.header.utilities`, after Watcher and before the files utility. The 32 px trigger is collapsed by default and exposes state through text in its accessible name as well as color.
 - Disclosure: click toggles the panel; clicking outside or pressing Escape closes it and returns focus to the trigger. Opening the panel never resizes the conversation or composer.
 - Running state: state label `正在优化`; primary action `暂停`.
-- Ended state: state label `本轮已结束`; action `关闭结果`. Never show `暂停` after the controller is inactive.
+- Ended state: state label `本轮已结束`; visible action `关闭`, with the result-card consequence carried by context and accessible naming. Never show `暂停` after the controller is inactive.
 - Dismissal is local to the displayed run. Starting a later goal creates a new run identity and is never suppressed by an earlier dismissal.
-- The best metric is the visual focus; baseline, percentage delta, kept/discarded counts, confidence, and commit ids are secondary.
+- The best metric is the only visual focus; baseline, delta, kept count, confidence, and failed-check count are secondary. Discard counts, secondary metrics, and commit ids stay out of this compact monitor.
 
 ### Experiment row
 
-- Shows run number, localized status, metric, description, and a demoted commit reference when available.
+- Shows run number, localized status, metric, and a one-line description. Commit references remain in the ledger rather than the monitor.
 - Status copy: `保留`, `未采用`, `运行失败`, `检查未通过`.
 - Rows remain readable with long Chinese descriptions and missing commit ids.
 
@@ -150,9 +150,9 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 - User intent: see whether the current research improved the project and choose the only sensible next action.
 - Message hierarchy: lifecycle state and goal -> best result vs baseline -> run health -> experiment explanations -> action.
 - Collapsed header answers: Autoresearch exists for this session and whether it is running or ended. The open panel answers what goal this is, what changed, and what the user can do next.
-- Primary action meaning: `暂停` stops automatic continuation but preserves results; `关闭结果` only dismisses an already-ended result card.
+- Primary action meaning: `暂停` stops automatic continuation but preserves results; `关闭` only dismisses an already-ended result card.
 - Voice and tone: calm, concise, plain Chinese; technical identifiers are secondary evidence.
-- Terminology rules: use `本轮`, `保留`, `未采用`, `正在优化`, `本轮已结束`, and `关闭结果`; avoid `paused`, `keep`, `discard`, `commit`, and internal skill names as primary copy.
+- Terminology rules: use `本轮`, `保留`, `未采用`, `正在优化`, `本轮已结束`, and `关闭`; avoid `paused`, `keep`, `discard`, `commit`, and internal skill names as primary copy.
 - State language rules: preparing = `正在准备新目标`; running = `正在优化`; ended = `本轮已结束`; dismissed = no card; a new explicit goal always creates a fresh goal identity.
 - Trust, risk, and help content: the start card may state that local protection is automatic and code is not uploaded. Progress UI does not teach Git.
 - Content risks: `已达成` cannot be inferred from a manual stop alone, so the neutral truthful completion label is `本轮已结束`.
@@ -208,26 +208,26 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 - Core user tasks: read outcome, inspect recent experiments, pause an active loop, close an ended result, start a different goal.
 - Page or screen inventory: start card, preparing line, first-run line, running progress panel, ended progress panel, dismissed state.
 - Navigation model: `/autoresearch` opens a new-start card in the composer; after confirmation, the header trigger owns waiting/running/results; its panel is collapsed by default; Close removes only the visible ended result.
-- Content hierarchy: state/goal, outcome, health summary, history, action.
+- Content hierarchy: state/goal, one outcome, one summary line, three recent proof points, action.
 - Primary CTA rules: exactly one primary state action; no Pause when inactive.
 
 ## Taste Signature
 
-- Design read: a quiet scientific instrument for a repeated desktop workflow, not a developer console.
-- Necessary judgment: remove the raw table header hierarchy and the invalid Pause action; keep outcome, provenance, and experiment explanations.
-- Taste dials: visual variance 3, information density 7, motion depth 1, brand distinction 4, type expressiveness 2, experiment risk 2.
-- Category defaults avoided: gray terminal slab, nested cards, generic KPI chip grid, decorative gradient, and equal emphasis on every datum.
-- Layout families: compact header utility plus an anchored outcome rail and editorial experiment list.
-- Visual memory feature: a small experiment-flask header glyph that opens the baseline-to-best outcome line and calm lifecycle badge.
+- Design read: a quiet utility instrument for a repeated desktop workflow, not a developer console or analytics dashboard.
+- Necessary judgment: remove the outcome box, state pill, commit ids, secondary metrics, discarded count, three surplus rows, and repeated labels; keep lifecycle truth, the best result, a compact trust summary, recent evidence, and recovery.
+- Taste dials: visual variance 2, information density 4, motion depth 1, brand distinction 3, type expressiveness 1, experiment risk 1.
+- Category defaults avoided: gray terminal slab, nested cards, KPI chip grid, status badges, decorative gradient, and equal emphasis on every datum.
+- Layout families: compact header utility plus a single-column result popover and editorial evidence list.
+- Visual memory feature: the small experiment-flask trigger and one calm, tabular result figure.
 - Type personality: utility-first system sans; tabular numerals provide precision while Chinese explanations stay humane.
 - Asset/reference policy: use only actual experiment data; no illustrative or fake product assets.
 - Anti-default locks: no glass, no gradient, no huge shadow, no monospaced body copy, no horizontal data table on mobile.
-- Intentional exceptions: semantic state badges are allowed because they communicate lifecycle, not decoration.
+- Intentional exceptions: a small state dot is allowed only with adjacent lifecycle text.
 
 ## Quality Gates
 
 - Request Anchor fit: all four requested changes are independently tested.
-- Visual: the panel has a visible boundary and distinct tonal surface; best result is primary; descriptions scan cleanly; no generic table/card-stack appearance.
+- Visual: the 420 px panel has one visible boundary and distinct tonal surface; one result is primary; three single-line descriptions and the action remain visible together; no generic table/card-stack appearance.
 - Accessibility: semantic buttons, visible focus, textual state, named close/pause action, >=44 px action height.
 - Responsive: no page-level horizontal overflow at 320 px; history reflows without losing descriptions; the open panel stays inside a 12 px viewport margin and never covers content while closed.
 - Interaction: header trigger, outside click, and Escape close the panel; focus returns to the trigger; pause is locked while pending; ended result closes locally; a new goal is not hidden by an old dismissal.
@@ -245,7 +245,7 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 - Theme strategy: inherit DSH semantic variables with accessible light fallbacks.
 - Dark mode: provided by host variables; no fixed white text assumptions.
 - Framework notes: React 18 client bundle through DSHX external client bundling.
-- Performance budget: no polling; render at most six recent rows.
+- Performance budget: no polling; render at most three recent rows while preserving the full ledger.
 - Visual regression: deterministic fixture screenshots at key lifecycle and viewport states.
 - Rendered UI Audit: sparse `data-ud-check` zones for header, outcome, history, and action.
 - Accessibility testing: browser name/target/overflow checks plus source-level semantic assertions.
@@ -271,3 +271,5 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 | 0.4 | 2026-08-30 | Accept the header monitor at 1280 px and 390 px | Same-page pinned-browser verification confirmed 1 px panel/outcome borders, distinct tonal surfaces, 12 px viewport clearance, zero overflow/errors, and keyboard/outside-click dismissal | Codex |
 | 0.5 | 2026-08-30 | Bind the header monitor to structured continue/complete/needs-user transitions | A completed Agent answer previously left `active=true`; atomic lifecycle decisions now prevent stale working state and preserve explicit user authority for tradeoffs | Codex |
 | 0.6 | 2026-08-30 | Remove future custom session writes and migrate legacy state envelopes with backup plus official reload validation | DSH intentionally refuses unknown required external events, so plugin-only state must ride the official command/tool vocabulary | Codex |
+| 0.7 | 2026-08-30 | Reduce the result panel to one outcome, one summary, three recent records, and one quiet action | User found the previous board visually overstuffed and asked for more restrained, disciplined hierarchy | Codex |
+| 0.8 | 2026-08-30 | Accept the restrained 420 px result popover at desktop and 390 px | Pinned-browser critique repaired a hidden-action P1; final render keeps all three recent records and Close visible with zero overflow or runtime errors | Codex |
