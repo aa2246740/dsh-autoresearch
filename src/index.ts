@@ -5,6 +5,7 @@
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
@@ -39,6 +40,11 @@ type SessionLike = {
   header?: { cwd?: string }
   events?: readonly unknown[]
   append?: (type: string, data: unknown) => void
+}
+
+type FollowupAgent = {
+  followup?: (message: UserMessage) => void
+  session?: SessionLike
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -134,12 +140,11 @@ function controllerFor(cwd: string): AutoresearchController {
   return created
 }
 
-function userMessage(text: string): { role: 'user'; content: Array<{ type: 'text'; text: string }>; source: { kind: 'user' } } {
-  return {
-    role: 'user',
+export function createAutoresearchFollowupMessage(text: string): UserMessage {
+  return createUserMessage({
     content: [{ type: 'text', text }],
-    source: { kind: 'user' },
-  }
+    source: { kind: 'plugin', plugin: name, form: 'instructions' },
+  })
 }
 
 function withSnapshot(controller: AutoresearchController, result: { text?: string; [key: string]: unknown }): ToolResult {
@@ -163,9 +168,9 @@ function toolOutput() {
   }
 }
 
-function followup(agent: { followup?: (message: unknown) => void } | undefined, text: string): void {
+export function queueAutoresearchFollowup(agent: FollowupAgent | undefined, text: string): void {
   if (!agent?.followup) return
-  agent.followup(userMessage(text))
+  agent.followup(createAutoresearchFollowupMessage(text))
 }
 
 function playbookFor(result: ToolResult): string {
@@ -241,7 +246,7 @@ export function apply(ctx: Context, config: Config): void {
       args: { type: 'string', description: 'Raw /autoresearch arguments' },
     },
     output: toolOutput(),
-    async execute(args: { args?: string }, exec: { agent?: { followup?: (message: unknown) => void; session?: SessionLike } }) {
+    async execute(args: { args?: string }, exec: { agent?: FollowupAgent }) {
       const cwd = workspaceOf(exec.agent)
       const controller = controllerFor(cwd)
       const raw = String(args.args ?? '')
@@ -251,7 +256,7 @@ export function apply(ctx: Context, config: Config): void {
         protectedPaths: protectedPathsFromSession(exec.agent?.session, cwd),
       }))
       if (result.ok && result.active && isActivating(raw)) {
-        followup(exec.agent, playbookFor(result))
+        queueAutoresearchFollowup(exec.agent, playbookFor(result))
       }
       return result
     },
@@ -315,13 +320,13 @@ export function apply(ctx: Context, config: Config): void {
     },
     output: toolOutput(),
     async execute(args: Record<string, unknown>, exec: {
-      agent?: { followup?: (message: unknown) => void; session?: { header?: { cwd?: string }; append?: (type: string, data: unknown) => void } }
+      agent?: FollowupAgent
       concludeTurn?: () => void
     }) {
       const controller = controllerFor(workspaceOf(exec.agent))
       const result = withSnapshot(controller, await controller.logExperiment(args))
       if (result.resume?.shouldSchedule) {
-        followup(exec.agent, CONTINUE_PLAYBOOK)
+        queueAutoresearchFollowup(exec.agent, CONTINUE_PLAYBOOK)
         exec.concludeTurn?.()
         if (result.resume.token) {
           try { controller.consumeResumeToken(result.resume.token) } catch { /* already consumed or cancelled */ }
@@ -348,7 +353,7 @@ export function apply(ctx: Context, config: Config): void {
       name: 'autoresearch',
       description: 'Explicitly start, resume, inspect, or stop a durable autoresearch experiment loop',
       input: { hint: '<goal | resume | status | off | clear>' },
-      handler: async (invocation: { agent: { followup?: (message: unknown) => void; session?: SessionLike }; rawInput: string }) => {
+      handler: async (invocation: { agent: FollowupAgent; rawInput: string }) => {
         const cwd = workspaceOf(invocation.agent)
         const controller = controllerFor(cwd)
         const raw = invocation.rawInput
@@ -359,7 +364,7 @@ export function apply(ctx: Context, config: Config): void {
         }))
         appendSnapshot(invocation.agent.session, result)
         if (result.ok && result.active && isActivating(raw)) {
-          followup(invocation.agent, playbookFor(result))
+          queueAutoresearchFollowup(invocation.agent, playbookFor(result))
         }
         return { kind: result.ok ? 'success' : 'error', text: result.text }
       },

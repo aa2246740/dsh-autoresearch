@@ -5,14 +5,22 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
+import type { UserMessage } from '@deepseek-ai/dsh-llm'
+import { adoptSessionEvent } from '@deepseek-ai/dsh-session'
 import { AutoresearchController, inferAutoresearchConfigFromPrompt } from '../src/controller.ts'
-import { mutationPathsFromToolCall, protectedPathsFromSession } from '../src/index.ts'
+import {
+  mutationPathsFromToolCall,
+  protectedPathsFromSession,
+  queueAutoresearchFollowup,
+} from '../src/index.ts'
 import { reconstructJsonlState } from '../src/jsonl.ts'
+import { repairAutoresearchSessionJsonl } from '../src/recovery.ts'
 import { appendHookLogEntryIfConfigured, runHook } from '../src/hooks.ts'
 import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from '../src/compaction.ts'
 import { sessionFilePath } from '../src/paths.ts'
 import { evaluatePendingGuard } from '../src/guard.ts'
 import { CONTINUE_MARKER, toJsonValue } from '../src/types.ts'
+import { CONTINUE_PLAYBOOK, CREATE_PLAYBOOK } from '../src/playbook.ts'
 import { foldAutoresearchProjection, preferLedgerSnapshot } from '../src/projection.ts'
 import {
   applyCommandText,
@@ -59,6 +67,79 @@ function writeExecutable(filePath: string, content: string): void {
   fs.writeFileSync(filePath, content)
   fs.chmodSync(filePath, 0o755)
 }
+
+test('every autoresearch followup survives the official session reload invariant', () => {
+  const queued: UserMessage[] = []
+  const agent = { followup: (message: UserMessage) => void queued.push(message) }
+  queueAutoresearchFollowup(agent, CREATE_PLAYBOOK)
+  queueAutoresearchFollowup(agent, CONTINUE_PLAYBOOK)
+
+  const messages = queued.map((message, index) => {
+    const serialized = JSON.stringify({
+      type: 'user/message',
+      seq: index + 1,
+      time: 1_000 + index,
+      data: message,
+      surfaceOp: 'append',
+    })
+    const restored = JSON.parse(serialized)
+    assert.doesNotThrow(() => adoptSessionEvent(restored))
+    return restored.data
+  })
+
+  assert.ok(messages.every(message => typeof message.id === 'string' && message.id.length > 0))
+  assert.notEqual(messages[0].id, messages[1].id)
+  assert.deepEqual(messages.map(message => message.source), [
+    { kind: 'plugin', plugin: 'dsh-autoresearch', form: 'instructions' },
+    { kind: 'plugin', plugin: 'dsh-autoresearch', form: 'instructions' },
+  ])
+})
+
+test('session recovery preserves one identity across Inbox and user-message copies', () => {
+  const header = { version: 0, id: 'session-recovery-test', createdAt: 1 }
+  const broken = (text: string) => ({
+    role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' },
+  })
+  const records = [
+    header,
+    { type: 'agent/inbox/spliced', seq: 0, time: 1, data: { target: 'next-turn', start: 0, inserted: [broken(CREATE_PLAYBOOK)] } },
+    { type: 'agent/inbox/spliced', seq: 1, time: 2, data: { target: 'next-turn', start: 0, removedCount: 1, inserted: [] } },
+    { type: 'user/message', seq: 2, time: 3, data: broken(CREATE_PLAYBOOK), surfaceOp: 'append' },
+    { type: 'agent/inbox/spliced', seq: 3, time: 4, data: { target: 'next-turn', start: 0, inserted: [broken(CONTINUE_PLAYBOOK)] } },
+    { type: 'agent/inbox/spliced', seq: 4, time: 5, data: { target: 'next-turn', start: 0, removedCount: 1, inserted: [] } },
+    { type: 'user/message', seq: 5, time: 6, data: broken(CONTINUE_PLAYBOOK), surfaceOp: 'append' },
+  ]
+  const input = `${records.map(record => JSON.stringify(record)).join('\n')}\n`
+  const first = repairAutoresearchSessionJsonl(input)
+  const second = repairAutoresearchSessionJsonl(input)
+  const repaired = first.jsonl.trim().split('\n').map(line => JSON.parse(line))
+  const firstInboxId = repaired[1].data.inserted[0].id
+  const firstMessageId = repaired[3].data.id
+  const secondInboxId = repaired[4].data.inserted[0].id
+  const secondMessageId = repaired[6].data.id
+
+  assert.equal(first.repairs.length, 4)
+  assert.equal(first.jsonl, second.jsonl)
+  assert.equal(firstInboxId, firstMessageId)
+  assert.equal(secondInboxId, secondMessageId)
+  assert.notEqual(firstInboxId, secondInboxId)
+  assert.doesNotThrow(() => adoptSessionEvent(repaired[3]))
+  assert.doesNotThrow(() => adoptSessionEvent(repaired[6]))
+})
+
+test('session recovery refuses unidentified messages outside known Autoresearch playbooks', () => {
+  const input = [
+    { version: 0, id: 'session-recovery-refusal', createdAt: 1 },
+    {
+      type: 'agent/inbox/spliced', seq: 0, time: 1,
+      data: {
+        target: 'next-turn', start: 0,
+        inserted: [{ role: 'user', content: [{ type: 'text', text: 'unknown' }], source: { kind: 'user' } }],
+      },
+    },
+  ].map(record => JSON.stringify(record)).join('\n')
+  assert.throws(() => repairAutoresearchSessionJsonl(input), /refusing unknown unidentified user message/)
+})
 
 test('session paths preserve current-layout precedence over stale legacy peers', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autoresearch-paths-'))

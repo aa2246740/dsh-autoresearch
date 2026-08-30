@@ -34,6 +34,19 @@ dshx start web dsh-autoresearch
 
 Do not commit machine-absolute paths in `cordis.yml`.
 
+## Maintainers: repairing legacy sessions
+
+Plugin versions before 2026-08-30 constructed automatic follow-up prompts as plain objects and omitted DSH's required `message.id`. Current code creates every follow-up with the official `createUserMessage()` helper, and its regression test JSON-round-trips each message through the official session loader.
+
+For an already affected session, stop the Host that can write it and create a separate candidate:
+
+```sh
+pnpm build
+pnpm repair-session -- --input /path/to/session.jsonl.zstd --output /tmp/session.repaired.jsonl.zstd
+```
+
+The repair tool never overwrites its input. It only accepts fingerprints of released Autoresearch create/continue playbooks and requires each Inbox insertion to pair with the later `user/message`; unknown unidentified messages, broken pairs, and invalid splices fail closed. Fully load the candidate with the target DSH release before backing up and atomically replacing the original.
+
 ## License
 
 MIT. Loop semantics ported from grok-autoresearch (Copyright Tobi Lutke, David Cortes). The DSH host and Web slots are new.

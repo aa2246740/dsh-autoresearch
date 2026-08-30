@@ -79,6 +79,19 @@ dshx start web dsh-autoresearch
 
 普通 prompt 禁止调用 `autoresearch_control` 来激活循环。
 
+## 维护：修复旧会话
+
+2026-08-30 之前的插件曾把自动续跑 prompt 直接拼成普通对象，缺少 DSH 要求的 `message.id`。新版统一通过官方 `createUserMessage()` 创建消息；回归测试还会把消息 JSON 往返后交给官方 session loader，防止同类问题再次进入发行版。
+
+如果旧会话已经受影响，先停止写入该会话的 Host，再生成候选文件：
+
+```sh
+pnpm build
+pnpm repair-session -- --input /path/to/session.jsonl.zstd --output /tmp/session.repaired.jsonl.zstd
+```
+
+修复器不会覆盖输入，只识别已发布过的 Autoresearch create/continue playbook 指纹，并要求 Inbox 插入与后续 `user/message` 成对出现；任何未知无 ID 消息、断开的配对或非法 splice 都会拒绝处理。候选文件仍应先用目标 DSH 版本完整加载，再备份原件并原子替换。
+
 ## 许可
 
 MIT。实验循环核心移植自 grok-autoresearch（Copyright Tobi Lutke, David Cortes）。本仓库的 DSH 宿主与 Web 槽位是新代码。
