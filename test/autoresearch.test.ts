@@ -875,6 +875,8 @@ test('progress UI is outcome-first, state-aware, and no longer a terminal table'
   assert.match(source, /model\.lifecycle === 'awaiting_user' \|\| !terminal/)
   assert.match(source, /data-state='completed-unread'/)
   assert.match(source, /data-state='completed-read'/)
+  assert.doesNotMatch(source, /\.dsh-ar-trigger::after/)
+  assert.doesNotMatch(source, /data-state='completed-unread'\]::after/)
   assert.match(source, /isCompletionUnread\(sessionId, snapshot\)/)
   assert.match(source, /setLocallyReadCompletion\(markCompletionRead\(sessionId, snapshot\)\)/)
   assert.match(source, /data-unread=\{completionUnread/)

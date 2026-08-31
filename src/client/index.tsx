@@ -138,7 +138,6 @@ const clientStyles = `
   .dsh-ar-header-root { position: relative; }
   .dsh-ar-trigger {
     box-sizing: border-box;
-    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -168,25 +167,6 @@ const clientStyles = `
   .dsh-ar-trigger[data-state='completed-read'] { color: ${colors.text}; }
   .dsh-ar-trigger[data-state='stopped'],
   .dsh-ar-trigger[data-state='ended'] { color: ${colors.muted}; }
-  .dsh-ar-trigger::after {
-    content: '';
-    position: absolute;
-    right: 2px;
-    bottom: 2px;
-    width: 6px;
-    height: 6px;
-    border: 1.5px solid ${colors.panel};
-    border-radius: 50%;
-    background: ${colors.muted};
-  }
-  .dsh-ar-trigger[data-state='running']::after { background: ${colors.accent}; }
-  .dsh-ar-trigger[data-state='ready']::after { background: ${colors.accent}; }
-  .dsh-ar-trigger[data-state='waiting']::after { background: ${colors.warn}; }
-  .dsh-ar-trigger[data-state='awaiting-user']::after { background: ${colors.warn}; }
-  .dsh-ar-trigger[data-state='completed-unread']::after { background: ${colors.good}; }
-  .dsh-ar-trigger[data-state='completed-read']::after { background: ${colors.muted}; }
-  .dsh-ar-trigger[data-state='stopped']::after,
-  .dsh-ar-trigger[data-state='ended']::after { background: ${colors.muted}; }
   .dsh-ar-menu {
     position: fixed;
     z-index: 1100;

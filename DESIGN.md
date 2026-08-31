@@ -67,7 +67,7 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 ## Colors
 
 - Host DSH semantic variables are authoritative in the running product; front-matter values are accessible light-theme fallbacks.
-- Primary is reserved for the current action. Secondary denotes retained improvements and a newly completed result that has not been opened. Once read, the completed trigger returns to the neutral foreground with a muted dot. Tertiary denotes discarded or waiting work. Error is reserved for actual failures.
+- Primary is reserved for the current action. Secondary denotes retained improvements and a newly completed result that has not been opened. Once read, the completed trigger returns to the neutral foreground. Tertiary denotes discarded or waiting work. Error is reserved for actual failures.
 - State is always written in text as well as color.
 
 ## Typography
@@ -91,7 +91,7 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 
 ## Shapes
 
-- The outer panel uses `rounded.lg`; controls use `rounded.md`; the lifecycle indicator is plain text plus a small semantic dot, not a pill.
+- The outer panel uses `rounded.lg`; controls use `rounded.md`; the header trigger is one icon with no badge, dot, or pill. Its whole-icon color and accessible name carry state.
 - Do not turn counts, metrics, or states into decorative capsules.
 
 ## Components
@@ -139,14 +139,14 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 ## Request Anchor
 
 - Original user request: redesign the ugly state card; replace Pause with Close when the goal is done; support repeated independent Autoresearch goals without retaining the old card; hide the two internal support skills from ordinary users.
-- Latest user override: keep the completed-result trigger available, but use green only while that completion is unread. Opening it marks that exact result read; refresh must not make it green again, while a later completion must become green. Do not modify DSH core.
+- Latest user override: remove the unexplained lower-right status dot because it duplicates the whole icon color. Keep the completed-result trigger available, use green only while that completion is unread, and preserve the accessible state name. Do not modify DSH core.
 - Deliverable: source, tests, built plugin, formal DSH installation, live verification, and publication to `main`.
 - Primary audience: non-technical DSH users who may run several unrelated Autoresearch goals in one project and conversation.
 - Core job to be done: understand the latest outcome at a glance, safely pause active work, and start another research goal without managing stale or fake-dismissed UI state.
-- Success criteria: completed cards show neither Pause nor Close; the collapsed completed-state trigger survives refresh; a new completion is green until first opened, then remains neutral across refresh; a later completion becomes unread/green again; a new goal starts a fresh segment and supersedes the old result immediately; internal finalize/hooks skills do not appear in user autocomplete; the monitoring board occupies no composer/transcript height while collapsed; header click, outside click, and Escape collapse work; every current-goal run is reachable through `查看全部`; every clamped preview has a mouse and keyboard full-view path; desktop and narrow views have no clipping or horizontal overflow.
+- Success criteria: completed cards show neither Pause nor Close; the header trigger has no duplicate corner dot; the collapsed completed-state trigger survives refresh; a new completion is green until first opened, then remains neutral across refresh; a later completion becomes unread/green again; a new goal starts a fresh segment and supersedes the old result immediately; internal finalize/hooks skills do not appear in user autocomplete; the monitoring board occupies no composer/transcript height while collapsed; header click, outside click, and Escape collapse work; every current-goal run is reachable through `查看全部`; every clamped preview has a mouse and keyboard full-view path; desktop and narrow views have no clipping or horizontal overflow.
 - Non-goals: redesign the whole DSH shell, expose advanced Git controls, erase the historical `.auto/log.jsonl` ledger, or add decorative motion.
 - Must preserve: automatic local protection, existing experiment data, DSH theme compatibility, same-session continuation safety, current `/autoresearch` entry point, and an unmodified DSH core checkout.
-- Validation must check against: the supplied session event order, controller state after `off -> new goal`, action absence in terminal state, unread-to-read color and accessible-label transition, browser-local read receipt after refresh, later-completion unread reset, new-goal supersession, skill invocation visibility, desktop/narrow rendered states, and formal Host/client activation.
+- Validation must check against: the supplied session event order, controller state after `off -> new goal`, action absence in terminal state, absence of a corner pseudo-element, unread-to-read whole-icon color and accessible-label transition, browser-local read receipt after refresh, later-completion unread reset, new-goal supersession, skill invocation visibility, desktop/narrow rendered states, and formal Host/client activation.
 
 ## Content Model
 
@@ -202,7 +202,7 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 | `design-okf/systems/typography-system.md` | Use system sans for copy and tabular figures for data | Metric rail and rows | Mixed Chinese/English screenshot review |
 | `design-okf/foundations/visual-hierarchy.md` | Make best result the single focal point and demote commit ids | Outcome summary | Critique pass and screenshot review |
 | `design-okf/systems/taste-engine.md` | Use a quiet instrument-panel read and reject terminal-table/card-stack defaults | Entire progress panel | Anti-default critique and rendered review |
-| `design-okf/foundations/necessary-design-judgment.md` | Remove both Pause and volatile Close from ended state; make green materially honest as unread attention instead of permanent decoration | State action, header trigger, and history | Lifecycle/action/read-receipt tests and Material Honesty Test |
+| `design-okf/foundations/necessary-design-judgment.md` | Remove Pause, volatile Close, and the duplicate corner dot; make whole-icon green materially honest as unread attention instead of permanent decoration | State action, header trigger, and history | Lifecycle/action/read-receipt tests plus Delete and Material Honesty Tests |
 | `design-okf/governance/design-to-code-governance.md` | Trace persistent tokens and component states to this contract | `DESIGN.md` and client implementation | Contract validator and source diff |
 | `design-okf/governance/request-integrity.md` | Keep all four user requests in the release gate | Whole change set | Final acceptance matrix |
 
@@ -225,7 +225,7 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 - Type personality: utility-first system sans; tabular numerals provide precision while Chinese explanations stay humane.
 - Asset/reference policy: use only actual experiment data; no illustrative or fake product assets.
 - Anti-default locks: no glass, no gradient, no huge shadow, no monospaced body copy, no horizontal data table on mobile.
-- Intentional exceptions: a small state dot is allowed because the icon-only control carries the same lifecycle and unread/read meaning in its accessible name; color is never the only state channel.
+- Intentional exceptions: none for state ornament. The icon-only control uses one whole-icon color channel plus a complete accessible name; no duplicate badge or dot is permitted.
 
 ## Quality Gates
 
@@ -281,3 +281,4 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 | 1.0 | 2026-08-30 | Move row disclosure from the description tail to the first-line trailing edge | The previous text affordance looked detached from the record header and competed with the explanation | Codex |
 | 1.1 | 2026-08-31 | Remove the volatile terminal Close action and retain the quiet completed trigger | Refresh restored the result because dismissal lived only in client memory; a fake durable close was less honest and less useful than no terminal action | Codex |
 | 1.2 | 2026-08-31 | Make green a persistent unread-completion signal rather than a permanent completed-state color | A result already opened by the user should stay available without continuing to demand attention after refresh | Codex |
+| 1.3 | 2026-08-31 | Remove the lower-right state dot from the header trigger | It repeated the whole-icon color and accessible name without adding a distinct state, so it failed the Delete Test | Codex |
