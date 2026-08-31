@@ -12,6 +12,13 @@ export interface CommandLifecycleAck {
   at: number
 }
 
+export interface ReadReceiptStorage {
+  getItem: (key: string) => string | null
+  setItem: (key: string, value: string) => void
+}
+
+const READ_RECEIPT_PREFIX = 'dsh-autoresearch.read.v1'
+
 /** Init card fields only. Metric / direction / measure.sh are inferred after confirm. */
 export interface ExperimentDraft {
   goal: string
@@ -171,6 +178,56 @@ export function progressIdentity(snapshot: AutoresearchSnapshot): string {
   const segment = snapshot.currentSegment ?? snapshot.results.at(-1)?.segment ?? 0
   const epoch = snapshot.sessionEpoch ?? 0
   return [snapshot.workDir, epoch, segment, snapshot.name ?? snapshot.goal ?? 'autoresearch'].join('::')
+}
+
+/**
+ * A read receipt belongs to one durable completion, not merely to the project.
+ * `completedAt` is authoritative for current logs; `updatedAt` keeps imported
+ * legacy completions distinguishable without making ordinary UI reads mutable.
+ */
+export function completionIdentity(snapshot: AutoresearchSnapshot): string {
+  const completedAt = snapshot.completedAt ?? snapshot.updatedAt ?? 0
+  return `${progressIdentity(snapshot)}::completed@${completedAt}`
+}
+
+export function completionReceiptKey(sessionId: string): string {
+  return `${READ_RECEIPT_PREFIX}:${sessionId}`
+}
+
+function browserReadReceiptStorage(): ReadReceiptStorage | null {
+  try {
+    return typeof globalThis.localStorage === 'undefined' ? null : globalThis.localStorage
+  } catch {
+    return null
+  }
+}
+
+export function isCompletionUnread(
+  sessionId: string,
+  snapshot: AutoresearchSnapshot,
+  storage: ReadReceiptStorage | null = browserReadReceiptStorage(),
+): boolean {
+  if (!storage) return true
+  try {
+    return storage.getItem(completionReceiptKey(sessionId)) !== completionIdentity(snapshot)
+  } catch {
+    return true
+  }
+}
+
+export function markCompletionRead(
+  sessionId: string,
+  snapshot: AutoresearchSnapshot,
+  storage: ReadReceiptStorage | null = browserReadReceiptStorage(),
+): string {
+  const identity = completionIdentity(snapshot)
+  try {
+    storage?.setItem(completionReceiptKey(sessionId), identity)
+  } catch {
+    // Storage can be unavailable in privacy-restricted contexts. The caller
+    // still keeps the identity in React state for this page lifetime.
+  }
+  return identity
 }
 
 /**

@@ -21,8 +21,11 @@ import {
   applyCommandAcknowledgement,
   buildStartLine,
   cancelInitDock,
+  completionIdentity,
   friendlyStartError,
   hideAfterConfirm,
+  isCompletionUnread,
+  markCompletionRead,
   parseRoundBudget,
   patchLab,
   progressIdentity,
@@ -161,7 +164,8 @@ const clientStyles = `
   .dsh-ar-trigger[data-state='ready'] { color: ${colors.accent}; }
   .dsh-ar-trigger[data-state='waiting'],
   .dsh-ar-trigger[data-state='awaiting-user'] { color: ${colors.warn}; }
-  .dsh-ar-trigger[data-state='completed'] { color: ${colors.good}; }
+  .dsh-ar-trigger[data-state='completed-unread'] { color: ${colors.good}; }
+  .dsh-ar-trigger[data-state='completed-read'] { color: ${colors.text}; }
   .dsh-ar-trigger[data-state='stopped'],
   .dsh-ar-trigger[data-state='ended'] { color: ${colors.muted}; }
   .dsh-ar-trigger::after {
@@ -179,7 +183,8 @@ const clientStyles = `
   .dsh-ar-trigger[data-state='ready']::after { background: ${colors.accent}; }
   .dsh-ar-trigger[data-state='waiting']::after { background: ${colors.warn}; }
   .dsh-ar-trigger[data-state='awaiting-user']::after { background: ${colors.warn}; }
-  .dsh-ar-trigger[data-state='completed']::after { background: ${colors.good}; }
+  .dsh-ar-trigger[data-state='completed-unread']::after { background: ${colors.good}; }
+  .dsh-ar-trigger[data-state='completed-read']::after { background: ${colors.muted}; }
   .dsh-ar-trigger[data-state='stopped']::after,
   .dsh-ar-trigger[data-state='ended']::after { background: ${colors.muted}; }
   .dsh-ar-menu {
@@ -756,6 +761,7 @@ function AutoresearchHeaderUtility({ ctx, sessionId, useSession, useProjection, 
   )
   const visible = lab.dock !== 'init' && (showBoard || showRunning || showWaiting)
   const [open, setOpen] = useState(false)
+  const [locallyReadCompletion, setLocallyReadCompletion] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -824,6 +830,21 @@ function AutoresearchHeaderUtility({ ctx, sessionId, useSession, useProjection, 
               ? '正在准备下一轮'
               : '循环已开启'
   const goalLabel = model?.name ?? projected?.name ?? snapshot?.name ?? null
+  const currentCompletion = monitorState === 'completed' && snapshot
+    ? completionIdentity(snapshot)
+    : null
+  const completionUnread = Boolean(
+    currentCompletion
+    && currentCompletion !== locallyReadCompletion
+    && snapshot
+    && isCompletionUnread(sessionId, snapshot),
+  )
+  const triggerState = monitorState === 'completed'
+    ? completionUnread ? 'completed-unread' : 'completed-read'
+    : monitorState
+  const accessibleStateLabel = monitorState === 'completed'
+    ? completionUnread ? '目标已完成，有新结果' : '目标已完成，已查看'
+    : stateLabel
 
   return (
     <div ref={rootRef} className="dsh-ar-header-root" data-autoresearch="header-utility">
@@ -834,11 +855,18 @@ function AutoresearchHeaderUtility({ ctx, sessionId, useSession, useProjection, 
         className="dsh-ar-trigger"
         data-autoresearch="header-trigger"
         data-open={open ? '' : undefined}
-        data-state={monitorState}
+        data-state={triggerState}
+        data-unread={completionUnread ? '' : undefined}
         aria-expanded={open}
-        aria-label={`Autoresearch，${stateLabel}${goalLabel ? `，${goalLabel}` : ''}`}
-        title={`Autoresearch · ${stateLabel}`}
-        onClick={() => setOpen((value) => !value)}
+        aria-label={`Autoresearch，${accessibleStateLabel}${goalLabel ? `，${goalLabel}` : ''}`}
+        title={`Autoresearch · ${accessibleStateLabel}`}
+        onClick={() => {
+          const nextOpen = !open
+          if (nextOpen && monitorState === 'completed' && snapshot) {
+            setLocallyReadCompletion(markCompletionRead(sessionId, snapshot))
+          }
+          setOpen(nextOpen)
+        }}
       >
         <AutoresearchIcon />
       </button>

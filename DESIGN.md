@@ -67,7 +67,7 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 ## Colors
 
 - Host DSH semantic variables are authoritative in the running product; front-matter values are accessible light-theme fallbacks.
-- Primary is reserved for the current action. Secondary denotes retained improvements. Tertiary denotes discarded or waiting work. Error is reserved for actual failures.
+- Primary is reserved for the current action. Secondary denotes retained improvements and a newly completed result that has not been opened. Once read, the completed trigger returns to the neutral foreground with a muted dot. Tertiary denotes discarded or waiting work. Error is reserved for actual failures.
 - State is always written in text as well as color.
 
 ## Typography
@@ -103,6 +103,7 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 - Disclosure: click toggles the panel; clicking outside or pressing Escape closes it and returns focus to the trigger. Opening the panel never resizes the conversation or composer.
 - Running state: state label `正在优化`; primary action `暂停`.
 - Ended state: state label `本轮已结束`; no footer action. Never show `暂停` after the controller is inactive, and never imply a durable close with a volatile client-only hide.
+- Completed attention state: a newly completed result uses the green trigger and accessible text `目标已完成，有新结果`. Opening the panel records a browser-local read receipt, immediately returns the trigger to neutral, and exposes `目标已完成，已查看` to assistive technology. Green means unread, never merely completed.
 - The latest completed result remains available from the quiet header trigger across refresh. Starting a later goal supersedes it; an explicit durable log clear removes it.
 - The best metric is the only visual focus; baseline, delta, kept count, confidence, and failed-check count are secondary. Discard counts, secondary metrics, and commit ids stay out of this compact monitor.
 
@@ -138,24 +139,24 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 ## Request Anchor
 
 - Original user request: redesign the ugly state card; replace Pause with Close when the goal is done; support repeated independent Autoresearch goals without retaining the old card; hide the two internal support skills from ordinary users.
-- Latest user override: a completed-result `关闭` must not pretend to be durable when refresh restores it. Keep the quiet top-bar status trigger persistently available, remove the misleading terminal close action, and let a new goal or explicit durable clear replace/remove the result. Do not modify DSH core.
+- Latest user override: keep the completed-result trigger available, but use green only while that completion is unread. Opening it marks that exact result read; refresh must not make it green again, while a later completion must become green. Do not modify DSH core.
 - Deliverable: source, tests, built plugin, formal DSH installation, live verification, and publication to `main`.
 - Primary audience: non-technical DSH users who may run several unrelated Autoresearch goals in one project and conversation.
 - Core job to be done: understand the latest outcome at a glance, safely pause active work, and start another research goal without managing stale or fake-dismissed UI state.
-- Success criteria: completed cards show neither Pause nor Close; the collapsed completed-state trigger survives refresh; a new goal starts a fresh segment and supersedes the old result immediately; internal finalize/hooks skills do not appear in user autocomplete; the monitoring board occupies no composer/transcript height while collapsed; header click, outside click, and Escape collapse work; every current-goal run is reachable through `查看全部`; every clamped preview has a mouse and keyboard full-view path; desktop and narrow views have no clipping or horizontal overflow.
+- Success criteria: completed cards show neither Pause nor Close; the collapsed completed-state trigger survives refresh; a new completion is green until first opened, then remains neutral across refresh; a later completion becomes unread/green again; a new goal starts a fresh segment and supersedes the old result immediately; internal finalize/hooks skills do not appear in user autocomplete; the monitoring board occupies no composer/transcript height while collapsed; header click, outside click, and Escape collapse work; every current-goal run is reachable through `查看全部`; every clamped preview has a mouse and keyboard full-view path; desktop and narrow views have no clipping or horizontal overflow.
 - Non-goals: redesign the whole DSH shell, expose advanced Git controls, erase the historical `.auto/log.jsonl` ledger, or add decorative motion.
 - Must preserve: automatic local protection, existing experiment data, DSH theme compatibility, same-session continuation safety, current `/autoresearch` entry point, and an unmodified DSH core checkout.
-- Validation must check against: the supplied session event order, controller state after `off -> new goal`, action absence in terminal state, completed-trigger survival after browser refresh, new-goal supersession, skill invocation visibility, desktop/narrow rendered states, and formal Host/client activation.
+- Validation must check against: the supplied session event order, controller state after `off -> new goal`, action absence in terminal state, unread-to-read color and accessible-label transition, browser-local read receipt after refresh, later-completion unread reset, new-goal supersession, skill invocation visibility, desktop/narrow rendered states, and formal Host/client activation.
 
 ## Content Model
 
 - User intent: see whether the latest research improved the project and intervene only when the loop is still active or awaiting a decision.
 - Message hierarchy: lifecycle state and goal -> best result vs baseline -> run health -> experiment explanations -> action only when required.
-- Collapsed header answers: Autoresearch exists for this session and whether it is running or ended. The open panel answers what goal this is, what changed, and what the user can do next.
+- Collapsed header answers: Autoresearch exists for this session, whether it is running or ended, and whether a completed result is new to this browser. The open panel answers what goal this is, what changed, and what the user can do next.
 - Primary action meaning: `暂停` stops automatic continuation but preserves results. Terminal results intentionally have no action.
 - Voice and tone: calm, concise, plain Chinese; technical identifiers are secondary evidence.
 - Terminology rules: use `本轮`, `保留`, `未采用`, `正在优化`, and `本轮已结束`; avoid `paused`, `keep`, `discard`, `commit`, `关闭结果`, and internal skill names as primary copy.
-- State language rules: preparing = `正在准备新目标`; running = `正在优化`; ended = `本轮已结束` and remains inspectable; a new explicit goal always creates a fresh goal identity and supersedes the prior result.
+- State language rules: preparing = `正在准备新目标`; running = `正在优化`; newly completed = green plus accessible `目标已完成，有新结果`; opened completion = neutral plus accessible `目标已完成，已查看`; ended = `本轮已结束` and remains inspectable; a new explicit goal always creates a fresh goal identity and supersedes the prior result.
 - Trust, risk, and help content: the start card may state that local protection is automatic and code is not uploaded. Progress UI does not teach Git.
 - Content risks: `已达成` cannot be inferred from a manual stop alone, so the neutral truthful completion label is `本轮已结束`.
 
@@ -194,14 +195,14 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 | Reference | Decision | Artifact target | Verification |
 |---|---|---|---|
 | `design-okf/methods/senior-design-process.md` | Define lifecycle and user outcome before visual styling | Controller, dashboard model, this contract | State transition tests precede implementation |
-| `design-okf/content/state-language.md` | Give preparing, running, awaiting-user, and ended states truthful copy; ended has no fake close action | Progress panel and actions | Copy/source assertions, refresh replay, and rendered states |
+| `design-okf/content/state-language.md` | Separate lifecycle truth from attention state: green means an unread completion, neutral means viewed, and ended has no fake close action | Header trigger, progress panel, and actions | Copy/source assertions, read-receipt refresh replay, and rendered states |
 | `design-okf/content/semantic-binding.md` | Bind every one-line preview to a native expanded-state button and an in-panel full-text region | History rows and full-history control | Keyboard expansion, aria-expanded, full-text equality, and source review |
-| `design-okf/digital/accessibility-usability.md` | Preserve focus, 44 px active actions, textual state parity, Escape collapse, and focus return | Header trigger, panel, buttons, status labels | Keyboard/focus and target-size audit |
+| `design-okf/digital/accessibility-usability.md` | Preserve focus, 44 px active actions, accessible unread/read text parity, Escape collapse, and focus return | Header trigger, panel, buttons, status labels | Keyboard/focus, accessible-name, persistence, and target-size audit |
 | `design-okf/digital/responsive-interaction.md` | Use an anchored non-blocking header panel and a reflowing history grid | Header utility and experiment history | 320/375/768/1280 screenshots, closed-height and overflow audit |
 | `design-okf/systems/typography-system.md` | Use system sans for copy and tabular figures for data | Metric rail and rows | Mixed Chinese/English screenshot review |
 | `design-okf/foundations/visual-hierarchy.md` | Make best result the single focal point and demote commit ids | Outcome summary | Critique pass and screenshot review |
 | `design-okf/systems/taste-engine.md` | Use a quiet instrument-panel read and reject terminal-table/card-stack defaults | Entire progress panel | Anti-default critique and rendered review |
-| `design-okf/foundations/necessary-design-judgment.md` | Remove both Pause and volatile Close from ended state; remove commit as a primary column | State action and history | Lifecycle/action/refresh tests and Delete Test |
+| `design-okf/foundations/necessary-design-judgment.md` | Remove both Pause and volatile Close from ended state; make green materially honest as unread attention instead of permanent decoration | State action, header trigger, and history | Lifecycle/action/read-receipt tests and Material Honesty Test |
 | `design-okf/governance/design-to-code-governance.md` | Trace persistent tokens and component states to this contract | `DESIGN.md` and client implementation | Contract validator and source diff |
 | `design-okf/governance/request-integrity.md` | Keep all four user requests in the release gate | Whole change set | Final acceptance matrix |
 
@@ -224,7 +225,7 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 - Type personality: utility-first system sans; tabular numerals provide precision while Chinese explanations stay humane.
 - Asset/reference policy: use only actual experiment data; no illustrative or fake product assets.
 - Anti-default locks: no glass, no gradient, no huge shadow, no monospaced body copy, no horizontal data table on mobile.
-- Intentional exceptions: a small state dot is allowed only with adjacent lifecycle text.
+- Intentional exceptions: a small state dot is allowed because the icon-only control carries the same lifecycle and unread/read meaning in its accessible name; color is never the only state channel.
 
 ## Quality Gates
 
@@ -232,7 +233,7 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 - Visual: the 420 px default panel keeps one result primary and three previews visible; opening one row or all history uses the existing internal scroll region without widening or resizing the conversation.
 - Accessibility: semantic buttons, visible focus, textual state, and a named >=44 px Pause action only while active.
 - Responsive: no page-level horizontal overflow at 320 px; history reflows without losing descriptions; the open panel stays inside a 12 px viewport margin and never covers content while closed.
-- Interaction: header trigger, outside click, and Escape collapse the panel; focus returns to the trigger; pause is locked while pending; ended result survives refresh; a new goal supersedes the old result.
+- Interaction: header trigger, outside click, and Escape collapse the panel; focus returns to the trigger; pause is locked while pending; opening a newly completed result marks it read; read state survives refresh; a later completion is unread again; a new goal supersedes the old result.
 - Motion: static-first; spinner stops under reduced motion.
 - Performance: no polling or new persistent client timer.
 - I18n/legal: mixed Chinese/English wraps; numbers use tabular figures; no external assets or claims.
@@ -243,7 +244,7 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 - CSS architecture: component-local React styles plus one scoped responsive/focus style block; the header panel is portaled to `document.body` and positioned with the host anchored-position helper; DSH semantic variables remain runtime truth.
 - Token implementation: constants map to the front-matter roles and host aliases.
 - Component naming: `ProgressCard` with named outcome, history, and state-action zones.
-- State naming: preparing, executing, active-ready, awaiting-user, completed, stopped, and superseded-by-new-goal. Durable completion is a structured controller transition, never inferred from prose.
+- State naming: preparing, executing, active-ready, awaiting-user, completed-unread, completed-read, stopped, and superseded-by-new-goal. Durable completion is a structured controller transition; unread/read is a browser-local attention state keyed to the completion identity.
 - Theme strategy: inherit DSH semantic variables with accessible light fallbacks.
 - Dark mode: provided by host variables; no fixed white text assumptions.
 - Framework notes: React 18 client bundle through DSHX external client bundling.
@@ -258,6 +259,7 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 - Completion is a structured controller transition; inactive-with-results is not guessed to mean success.
 - Existing DSH semantic variables provide sufficient dark-theme contrast.
 - Historical rows remain in `.auto/log.jsonl`; the UI scopes them by the current experiment segment.
+- Browser-local storage is available in the formal DSH Web client; if privacy restrictions deny it, read state still lasts for the current page but cannot honestly be promised across refresh.
 
 ## Open Questions
 
@@ -278,3 +280,4 @@ Autoresearch is a compact session-header monitor. Its audience is a beginner who
 | 0.9 | 2026-08-30 | Add progressive disclosure for complete history and row details | User correctly identified that visual truncation without a full-view path sacrificed the monitor's core information job | Codex |
 | 1.0 | 2026-08-30 | Move row disclosure from the description tail to the first-line trailing edge | The previous text affordance looked detached from the record header and competed with the explanation | Codex |
 | 1.1 | 2026-08-31 | Remove the volatile terminal Close action and retain the quiet completed trigger | Refresh restored the result because dismissal lived only in client memory; a fake durable close was less honest and less useful than no terminal action | Codex |
+| 1.2 | 2026-08-31 | Make green a persistent unread-completion signal rather than a permanent completed-state color | A result already opened by the user should stay available without continuing to demand attention after refresh | Codex |

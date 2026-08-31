@@ -33,10 +33,14 @@ import {
   applyCommandAcknowledgement,
   buildStartLine,
   cancelInitDock,
+  completionIdentity,
+  completionReceiptKey,
   emptyDraft,
   friendlyStartError,
   getLabState,
   hideAfterConfirm,
+  isCompletionUnread,
+  markCompletionRead,
   parseRoundBudget,
   progressIdentity,
   recordCommandAcknowledgement,
@@ -723,7 +727,7 @@ test('a newer goal epoch supersedes a longer old ledger before its first baselin
   assert.equal(buildDashboardModel(preparing).runs, 0)
 })
 
-test('ended progress uses a close lifecycle instead of a running action', () => {
+test('ended progress uses a terminal lifecycle instead of a running action', () => {
   const ended = emptySnapshot({
     active: false,
     manualOff: true,
@@ -769,6 +773,34 @@ test('a completed result stays addressable until a new goal supersedes its ident
   assert.equal('dismissedProgressKey' in getLabState(), false)
   hideAfterConfirm(progressIdentity(ended))
   assert.equal(getLabState().supersededProgressKey, progressIdentity(ended))
+})
+
+test('completion read receipts survive refresh semantics and reset for a later completion', () => {
+  const values = new Map<string, string>()
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value) },
+  }
+  const completed = emptySnapshot({
+    active: false,
+    loopState: 'completed',
+    sessionEpoch: 4,
+    currentSegment: 2,
+    name: 'finished goal',
+    completedAt: 100,
+    updatedAt: 100,
+    results: [sampleRun({ run: 1, segment: 2, metric: 90, status: 'keep' })],
+  })
+
+  assert.equal(isCompletionUnread('session-a', completed, storage), true)
+  assert.equal(markCompletionRead('session-a', completed, storage), completionIdentity(completed))
+  assert.equal(values.get(completionReceiptKey('session-a')), completionIdentity(completed))
+  assert.equal(isCompletionUnread('session-a', completed, storage), false)
+
+  const laterGoal = emptySnapshot({ ...completed, sessionEpoch: 5, name: 'another goal', completedAt: 200, updatedAt: 200 })
+  assert.equal(isCompletionUnread('session-a', laterGoal, storage), true)
+  const laterCompletion = emptySnapshot({ ...completed, completedAt: 300, updatedAt: 300 })
+  assert.equal(isCompletionUnread('session-a', laterCompletion, storage), true)
 })
 
 test('formatNum glues short units and spaces longer ones', () => {
@@ -841,6 +873,11 @@ test('progress UI is outcome-first, state-aware, and no longer a terminal table'
   assert.doesNotMatch(source, /关闭本轮结果/)
   assert.doesNotMatch(source, /dismissProgress|isProgressDismissed|dismissedProgressKey/)
   assert.match(source, /model\.lifecycle === 'awaiting_user' \|\| !terminal/)
+  assert.match(source, /data-state='completed-unread'/)
+  assert.match(source, /data-state='completed-read'/)
+  assert.match(source, /isCompletionUnread\(sessionId, snapshot\)/)
+  assert.match(source, /setLocallyReadCompletion\(markCompletionRead\(sessionId, snapshot\)\)/)
+  assert.match(source, /data-unread=\{completionUnread/)
   assert.match(source, /正在优化/)
   assert.doesNotMatch(source, /<table/)
   assert.match(source, /data-autoresearch="history-list-toggle"/)
