@@ -82,6 +82,21 @@ dsh web --port 43123
 
 活动循环也可以在顶部面板中暂停。已经结束的结果不显示“暂停”或没有持久意义的“关闭”按钮。
 
+## 安装、本机权限和商店核验
+
+本插件**没有**安装时自动跑的脚本（没有 `prepare` / `preinstall` / `install` / `postinstall`）。克隆后请自己执行 `pnpm build`；只有发布到 npm 时才会用 `prepublishOnly` 构建。`lib/` 不进 Git。
+
+官方 `@deepseek-ai/*` 运行时由 DSH 宿主提供。本插件只在 `peerDependencies` 里声明它们，**不会再带一份官方包副本**。否则在部分 profile 布局下会出现双实例，会话 preset 会挂不上。
+
+权限是如实声明的，不是藏起来的：
+
+- **files（文件）**：只读写当前项目里的 `.auto/` 实验账本，以及本机 Git 或私有快照保护。不会上传，也不会 push。
+- **commands（命令）**：只在本机跑 git、bash 测量脚本、正确性检查和可选 hooks。
+
+因为循环本身就要读写项目文件并启动本机命令，能力级别较高。DSH STORE 的自动源码核验安装可能仍会拦截，需要你自己审阅后再装——这是预期行为，不是安装失败。
+
+如果 Web profile 曾经写过 `nodeLinker: hoisted`，从该 profile 的 `pnpm-workspace.yaml` 里删掉这一行，然后在该目录执行一次 `pnpm install` 即可。插件不用重新添加。
+
 ## 什么会自动，什么不会
 
 | 场景 | 插件的处理 |

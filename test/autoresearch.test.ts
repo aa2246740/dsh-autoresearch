@@ -809,6 +809,53 @@ test('formatNum glues short units and spaces longer ones', () => {
   assert.equal(formatNum(8.5, ''), '8.50')
 })
 
+test('package.json is 1.0.5 with host peers and no install-lifecycle or official copies', () => {
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    version: string
+    scripts?: Record<string, string>
+    dependencies?: Record<string, string>
+    optionalDependencies?: Record<string, string>
+    peerDependencies?: Record<string, string>
+    dsh?: { compatibility?: { dshReleases?: Record<string, string> } }
+  }
+  assert.equal(pkg.version, '1.0.5')
+  const scripts = pkg.scripts ?? {}
+  for (const name of ['prepare', 'preinstall', 'install', 'postinstall']) {
+    assert.equal(name in scripts, false, name)
+  }
+  const dependencies = pkg.dependencies ?? {}
+  assert.deepEqual(dependencies, {})
+  assert.equal(pkg.optionalDependencies, undefined)
+  const officialCopies = [
+    '@deepseek-ai/cordis',
+    '@deepseek-ai/dsh-agent',
+    '@deepseek-ai/dsh-attachment',
+    '@deepseek-ai/dsh-brand',
+    '@deepseek-ai/dsh-code-runtime',
+    '@deepseek-ai/dsh-invariants',
+    '@deepseek-ai/dsh-llm',
+    '@deepseek-ai/dsh-scope',
+    '@deepseek-ai/dsh-session',
+    '@deepseek-ai/dsh-settings',
+    '@deepseek-ai/dsh-system-prompt',
+    '@deepseek-ai/dsh-timeout',
+    '@deepseek-ai/dsh-tools',
+    '@deepseek-ai/dsh-typert-protocol',
+    '@deepseek-ai/dsh-user-approval',
+    '@deepseek-ai/schemastery',
+  ]
+  for (const name of officialCopies) {
+    assert.equal(Object.hasOwn(dependencies, name), false, name)
+  }
+  const peers = pkg.peerDependencies ?? {}
+  assert.equal(peers['@deepseek-ai/cordis'], '^4.0.1')
+  assert.equal(peers['@deepseek-ai/dsh-llm'], '0.1.1-rc.2')
+  assert.equal(peers['@deepseek-ai/dsh-tools'], '0.1.1-rc.2')
+  assert.equal(peers['@deepseek-ai/dsh-settings'], '0.1.1-rc.2')
+  assert.equal(peers['@deepseek-ai/schemastery'], '^3.18.1')
+  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.1.1-rc.2'], 'compatible')
+})
+
 test('client daily chrome has no experiment chip and init form is goal+rounds', () => {
   const source = fs.readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { dsh: { client: { inject: string[] } } }

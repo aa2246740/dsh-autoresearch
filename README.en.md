@@ -38,6 +38,21 @@ dshx start web dsh-autoresearch
 
 Do not commit machine-absolute paths in `cordis.yml`.
 
+## Permissions, host packages, and STORE review
+
+There are **no** install-lifecycle scripts (`prepare` / `preinstall` / `install` / `postinstall`). After clone, run `pnpm build` yourself; `prepublishOnly` builds only for npm publish. `lib/` stays gitignored.
+
+Official `@deepseek-ai/*` runtimes come from the DSH host. This plugin declares them as `peerDependencies` and **does not ship copies**. Shipping copies can create dual instances under some profile layouts and break session presets.
+
+Permissions are declared honestly:
+
+- **files**: project-local `.auto/` ledger plus local git-or-snapshot protection. Never upload or push.
+- **commands**: local git, bash measure/checks, and optional hooks.
+
+The loop inherently reads project files and runs local commands, so capability is high. DSH STORE source-verified auto-install may stay blocked and require user review. That is expected.
+
+If a Web profile previously set `nodeLinker: hoisted`, remove that line from the profile `pnpm-workspace.yaml` and run `pnpm install` there. The plugin does not need to be re-added.
+
 ## Maintainers: repairing legacy sessions
 
 Plugin versions before 2026-08-30 constructed automatic follow-up prompts as plain objects and omitted DSH's required `message.id`. Current code creates every follow-up with the official `createUserMessage()` helper, and its regression test JSON-round-trips each message through the official session loader.
