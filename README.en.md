@@ -18,7 +18,7 @@ Same-session auto-resume uses Host `agent.followup` until `maxIterations`, `/aut
 
 ## Install
 
-Requires `dsh` CLI (for example `@deepseek-ai/dsh@0.1.1-rc.2`), a Web profile, and **Node 22.19+** (`dsh web` uses `zlib.createZstdDecompress`).
+Requires `dsh` CLI (for example `@deepseek-ai/dsh@0.1.2-rc.1`), a Web profile, and **Node 22.19+** (`dsh web` uses `zlib.createZstdDecompress`).
 
 ```sh
 pnpm install --ignore-workspace

@@ -51,7 +51,7 @@ English: [README.en.md](./README.en.md)
 
 ## 一分钟开始
 
-当前包依赖 DSH `0.1.1-rc.2` 系列、一个 Web profile，以及 **Node.js 22.19+**。`dsh web` 会使用 `zlib.createZstdDecompress`，更早的 Node 22 版本可能无法启动。
+当前包依赖 DSH `0.1.2-rc.1` 系列、一个 Web profile，以及 **Node.js 22.19+**。`dsh web` 会使用 `zlib.createZstdDecompress`，更早的 Node 22 版本可能无法启动。
 
 ```sh
 git clone https://github.com/aa2246740/dsh-autoresearch.git

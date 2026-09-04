@@ -6,8 +6,8 @@ import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import type {} from '@deepseek-ai/dsh-settings'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { AutoresearchController } from './controller.js'
 import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from './compaction.js'
@@ -25,7 +25,7 @@ import { toJsonValue, type AutoresearchProjectionState, type AutoresearchSnapsho
 
 export const name = 'dsh-autoresearch'
 export const inject = ['tools', 'sessionPersistence']
-export const NS = settingsNamespace('autoresearch')
+export const NS = 'autoresearch'
 
 export interface Config {
   maxIterations?: number
@@ -208,16 +208,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   console.log(MARKER)
 
   let source = () => config
-  try {
-    installSettingsSection(ctx, NS, Config, config, {
-      setSource: (current: unknown) => {
-        source = typeof current === 'function' ? current as () => Config : () => current as Config
+  ctx.inject(['settings'], settingsCtx => {
+    settingsCtx.settings.installSection(ctx, NS, Config, config, {
+      setSource: current => {
+        source = current
       },
       onChange: () => { void source() },
     })
-  } catch {
-    /* settings service is optional */
-  }
+  })
 
   ctx.on('tools/pre-execute', (exec: { name: string; arguments?: unknown; agent?: { session?: { header?: { cwd?: string } } } }, next: () => Promise<unknown>) => {
     const cwd = workspaceOf(exec.agent)

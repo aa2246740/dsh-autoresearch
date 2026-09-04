@@ -836,6 +836,7 @@ test('package.json is 1.0.5 with host peers and no install-lifecycle or official
     '@deepseek-ai/dsh-llm',
     '@deepseek-ai/dsh-scope',
     '@deepseek-ai/dsh-session',
+    '@deepseek-ai/dsh-session-projection',
     '@deepseek-ai/dsh-settings',
     '@deepseek-ai/dsh-system-prompt',
     '@deepseek-ai/dsh-timeout',
@@ -848,12 +849,20 @@ test('package.json is 1.0.5 with host peers and no install-lifecycle or official
     assert.equal(Object.hasOwn(dependencies, name), false, name)
   }
   const peers = pkg.peerDependencies ?? {}
-  assert.equal(peers['@deepseek-ai/cordis'], '^4.0.1')
-  assert.equal(peers['@deepseek-ai/dsh-llm'], '0.1.1-rc.2')
-  assert.equal(peers['@deepseek-ai/dsh-tools'], '0.1.1-rc.2')
-  assert.equal(peers['@deepseek-ai/dsh-settings'], '0.1.1-rc.2')
-  assert.equal(peers['@deepseek-ai/schemastery'], '^3.18.1')
-  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.1.1-rc.2'], 'compatible')
+  assert.equal(peers['@deepseek-ai/cordis'], '^4.0.2')
+  assert.equal(peers['@deepseek-ai/dsh-llm'], '^0.1.2-rc.1')
+  assert.equal(peers['@deepseek-ai/dsh-tools'], '^0.1.2-rc.1')
+  assert.equal(peers['@deepseek-ai/dsh-settings'], '^0.1.2-rc.1')
+  assert.equal(peers['@deepseek-ai/dsh-session-projection'], '^0.1.2-rc.1')
+  assert.equal(peers['@deepseek-ai/schemastery'], '^3.18.2')
+  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.1.2-rc.1'], 'compatible')
+})
+
+test('host settings use the RC1 optional settings seam', () => {
+  const source = fs.readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.match(source, /import type \{\} from '@deepseek-ai\/dsh-settings'/)
+  assert.match(source, /ctx\.inject\(\['settings'\], settingsCtx => \{\s+settingsCtx\.settings\.installSection\(ctx, NS, Config, config,/s)
+  assert.doesNotMatch(source, /installSettingsSection|settingsNamespace/)
 })
 
 test('client daily chrome has no experiment chip and init form is goal+rounds', () => {

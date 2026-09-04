@@ -18,11 +18,6 @@ declare module '@deepseek-ai/dsh-tools' {
   export function defineTool(definition: Record<string, unknown>): unknown
 }
 
-declare module '@deepseek-ai/dsh-settings' {
-  export function settingsNamespace(name: string): string
-  export function installSettingsSection(...args: unknown[]): unknown
-}
-
 declare module '@deepseek-ai/schemastery' {
   interface Schema<T> {
     (value?: unknown): T
