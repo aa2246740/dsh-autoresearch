@@ -1,71 +1,53 @@
 # DSH Autoresearch
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that ports the durable experiment loop from [grok-autoresearch](https://github.com/aa2246740/grok-autoresearch) / [pi-autoresearch](https://github.com/aa2246740/pi-autoresearch). The ledger stays in `.auto/`. **Create, run, and monitor in the official Web GUI** (plus `/autoresearch`). Build and cold-boot through [dshx](https://github.com/aa2246740/dsh-external-plugin-devkit).
+[中文](./README.md)
 
-中文：[README.md](./README.md)
+A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web plugin for the experiment loop from [grok-autoresearch](https://github.com/aa2246740/grok-autoresearch) / [pi-autoresearch](https://github.com/aa2246740/pi-autoresearch). `/autoresearch` creates a goal. The agent edits, measures, keeps or rolls back. A collapsible bar at the top of the session reports results.
 
-## Activation boundary
+Needs DSH `0.1.2-rc.1`, a Web profile, and Node.js 22.19+. `dsh web` uses `zlib.createZstdDecompress`.
 
-This is not ordinary chat. A random prompt must not start the loop. The home page and composer tool row have **no** standing experiment control.
-
-Type `/autoresearch` (or pick **Start a new Autoresearch** in the slash menu) to open a reserved init dock **above the composer**. Confirm is required before `active` becomes true. The init card has two fields: a natural-language goal (same as grok-autoresearch `/autoresearch <goal>`) and a round budget. Users never need to configure Git: the plugin reuses a clean repository when safe, creates local protection when needed, and silently falls back to private file snapshots when Git is missing, busy, or the project already has local work. Nothing is uploaded and an existing index/history is not polluted. New edit targets are added to protection before their first mutation. After confirm, the composer dock disappears completely. Waiting, running, and result monitoring move into a collapsed flask control in the session header, so the transcript keeps its reading height. The first `run_experiment` exposes the running state; the first `log_experiment` enables an anchored, bordered result board with the outcome and recent experiments. Click the trigger again, click outside, or press Escape to hide it.
-
-Every logged experiment atomically records whether the loop continues, completes, or waits for a user decision. Verified completion clears automatic continuation and changes the header state to **Goal completed** without asking a beginner to type `/autoresearch off`. Product or quality tradeoffs pause the loop with a concrete decision question instead of pretending that work is still running.
-
-Since 1.0.4, the plugin writes no out-of-repo custom event into DSH session logs. It folds only the official `command/run`, `command/done`, and `tool/result` vocabulary. On upgrade it checks workspaces that previously used Autoresearch; a legacy `autoresearch/state` record is backed up byte-for-byte, changed only by adding `ignorable: true`, atomically published, and then fully reloaded through the active official DSH persistence implementation. Any validation failure restores the original log.
-
-Same-session auto-resume uses Host `agent.followup` until `maxIterations`, `/autoresearch off`, a stuck state, or an interrupt.
+The plugin does not upload or push project code. There is no install-time `prepare` / `preinstall` / `postinstall`. Build with `pnpm build` after clone. `lib/` is not in git.
 
 ## Install
 
-Requires `dsh` CLI (for example `@deepseek-ai/dsh@0.1.2-rc.1`), a Web profile, and **Node 22.19+** (`dsh web` uses `zlib.createZstdDecompress`).
-
 ```sh
+git clone https://github.com/aa2246740/dsh-autoresearch.git
+cd dsh-autoresearch
 pnpm install --ignore-workspace
 pnpm build
 dsh plugin --profile web add . -w
 dsh web --port 43123
 ```
 
-dshx against a Harness checkout:
+Open a project session, type `/autoresearch`, pick a new run, fill the goal and round limit, confirm. DSH STORE review may still block the install because the loop reads project files and runs local commands. That is expected.
+
+Official `@deepseek-ai/*` packages come from the DSH host. This plugin only lists them in `peerDependencies`. If the Web profile ever set `nodeLinker: hoisted`, delete that line from that profile's `pnpm-workspace.yaml` and run `pnpm install` there.
+
+## Commands
+
+| Command | Meaning |
+|---|---|
+| `/autoresearch` | New run, continue, status, stop, or clear |
+| `/autoresearch resume` | Continue a paused run |
+| `/autoresearch status` | Current durable state |
+| `/autoresearch off` | Stop auto-continue, keep results |
+| `/autoresearch clear` | Clear this project's Autoresearch ledger |
+
+Before a run it takes a local safety point: a Git baseline when that works, otherwise a private snapshot. `discard` / `crash` / `checks_failed` restore protected files. A model saying "done" does not finish the loop. The ledger must write `complete`. Value tradeoffs pause for you.
+
+The ledger lives in project `.auto/`: `prompt.md`, `measure.sh`, optional `checks.sh`, `log.jsonl`, `ideas.md`, `config.json`.
+
+## Develop
 
 ```sh
-dshx setup --harness /path/to/deepseek-harness
+pnpm install --ignore-workspace
+pnpm typecheck
+pnpm test
+pnpm build
 dshx check dsh-autoresearch
 dshx verify-boot dsh-autoresearch --port 43123
-dshx start web dsh-autoresearch
 ```
-
-Do not commit machine-absolute paths in `cordis.yml`.
-
-## Permissions, host packages, and STORE review
-
-There are **no** install-lifecycle scripts (`prepare` / `preinstall` / `install` / `postinstall`). After clone, run `pnpm build` yourself; `prepublishOnly` builds only for npm publish. `lib/` stays gitignored.
-
-Official `@deepseek-ai/*` runtimes come from the DSH host. This plugin declares them as `peerDependencies` and **does not ship copies**. Shipping copies can create dual instances under some profile layouts and break session presets.
-
-Permissions are declared honestly:
-
-- **files**: project-local `.auto/` ledger plus local git-or-snapshot protection. Never upload or push.
-- **commands**: local git, bash measure/checks, and optional hooks.
-
-The loop inherently reads project files and runs local commands, so capability is high. DSH STORE source-verified auto-install may stay blocked and require user review. That is expected.
-
-If a Web profile previously set `nodeLinker: hoisted`, remove that line from the profile `pnpm-workspace.yaml` and run `pnpm install` there. The plugin does not need to be re-added.
-
-## Maintainers: repairing legacy sessions
-
-Plugin versions before 2026-08-30 constructed automatic follow-up prompts as plain objects and omitted DSH's required `message.id`. Current code creates every follow-up with the official `createUserMessage()` helper, and its regression test JSON-round-trips each message through the official session loader.
-
-Version 1.0.4 automatically migrates legacy `autoresearch/state` envelopes at Host startup. The command below is only for a maintainer repairing the earlier message-identity defect offline. Stop the Host that can write the session, then create a separate candidate:
-
-```sh
-pnpm build
-pnpm repair-session -- --input /path/to/session.jsonl.zstd --output /tmp/session.repaired.jsonl.zstd
-```
-
-The repair tool never overwrites its input. It only accepts fingerprints of released Autoresearch create/continue playbooks and requires each Inbox insertion to pair with the later `user/message`; unknown unidentified messages, broken pairs, and invalid splices fail closed. Fully load the candidate with the target DSH release before backing up and atomically replacing the original.
 
 ## License
 
-MIT. Loop semantics ported from grok-autoresearch (Copyright Tobi Lutke, David Cortes). The DSH host and Web slots are new.
+[MIT](./LICENSE). The loop core is ported from grok-autoresearch (Copyright Tobi Lutke, David Cortes). DSH Host integration and the Web UI are new in this repo.
