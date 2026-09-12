@@ -30,7 +30,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test test/autoresearch.test.ts test/guard.test.ts",
+    "test": "tsx --test test/autoresearch.test.ts test/guard.test.ts test/stock-install.test.ts",
     "repair-session": "node scripts/repair-autoresearch-session.mjs",
     "prepublishOnly": "npm run build"
   },
@@ -46,7 +46,8 @@
     "deepseek",
     "dsh",
     "autoresearch",
-    "plugin"
+    "plugin",
+    "dsh-plugin"
   ],
   "dsh": {
     "bundle": {
