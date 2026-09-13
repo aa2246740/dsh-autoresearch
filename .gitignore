@@ -1,5 +1,4 @@
 node_modules/
-lib/
 .dshx/
 *.tsbuildinfo
 .DS_Store
@@ -7,3 +6,5 @@ lib/
 .env.*
 coverage/
 agent-tools/
+lib/types/**/*.js
+lib/types/**/*.js.map

@@ -2,26 +2,38 @@
 
 [中文](./README.md)
 
+```sh
+dsh plugin --profile web add github:aa2246740/dsh-autoresearch
+```
+
+You need official `dsh` (or `npx @deepseek-ai/dsh`) and **pnpm** on `PATH`. `dsh plugin add` runs pnpm in `$DSH_HOME/profiles/web` and, because this package declares `dsh.bundle.patch`, appends the bundle to that profile. `lib/` is committed, so a git install does not need a local build, `prepare`, or `allowBuilds`.
+
+Then **restart that Host and reload the page**. The command writes the profile. It does not hot-load a running process.
+
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web plugin for the experiment loop from [grok-autoresearch](https://github.com/aa2246740/grok-autoresearch) / [pi-autoresearch](https://github.com/aa2246740/pi-autoresearch). `/autoresearch` creates a goal. The agent edits, measures, keeps or rolls back. A collapsible bar at the top of the session reports results.
 
-Needs DSH `0.1.2-rc.1`, a Web profile, and Node.js 22.19+. `dsh web` uses `zlib.createZstdDecompress`.
+Official DeepSeek Harness **0.1.5-rc.2**, and Node.js 22.19+. `dsh web` uses `zlib.createZstdDecompress`.
 
-The plugin does not upload or push project code. There is no install-time `prepare` / `preinstall` / `postinstall`. Build with `pnpm build` after clone. `lib/` is not in git.
-
-## Install
-
-```sh
-git clone https://github.com/aa2246740/dsh-autoresearch.git
-cd dsh-autoresearch
-pnpm install --ignore-workspace
-pnpm build
-dsh plugin --profile web add . -w
-dsh web --port 43123
-```
+The plugin does not upload or push project code.
 
 Open a project session, type `/autoresearch`, pick a new run, fill the goal and round limit, confirm. DSH STORE review may still block the install because the loop reads project files and runs local commands. That is expected.
 
 Official `@deepseek-ai/*` packages come from the DSH host. This plugin only lists them in `peerDependencies`. If the Web profile ever set `nodeLinker: hoisted`, delete that line from that profile's `pnpm-workspace.yaml` and run `pnpm install` there.
+
+From a clone:
+
+```sh
+git clone https://github.com/aa2246740/dsh-autoresearch.git
+dsh plugin --profile web add ./dsh-autoresearch
+```
+
+That path also needs pnpm, then a Host restart and page reload. `lib/` is already in the repo, so you do not need to build first.
+
+```sh
+dsh plugin --profile web remove dsh-autoresearch
+```
+
+DSH.app's `desktop` profile rejects `github:`. Use `dsh web` and install into the `web` profile.
 
 ## Commands
 
@@ -39,13 +51,13 @@ The ledger lives in project `.auto/`: `prompt.md`, `measure.sh`, optional `check
 
 ## Develop
 
+Skip this for a normal install. Rebuild the committed `lib/` with **pnpm** after TypeScript changes:
+
 ```sh
 pnpm install --ignore-workspace
 pnpm typecheck
 pnpm test
 pnpm build
-dshx check dsh-autoresearch
-dshx verify-boot dsh-autoresearch --port 43123
 ```
 
 ## License
