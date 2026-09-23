@@ -1,8 +1,14 @@
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client';
 import type { CommandUiContract } from '@deepseek-ai/dsh-client-ui-commands/client';
 export declare const name = "dsh-autoresearch-client";
 export declare const inject: string[];
-type AnyCtx = ClientContext & {
+type ConfigFormLike = {
+    getSnapshot: () => {
+        value?: Record<string, unknown>;
+    };
+    subscribe: (listener: () => void) => () => void;
+    set: (field: string, value: unknown) => Promise<boolean> | void;
+};
+type AnyCtx = {
     slots: {
         inject: (name: string, factory: () => unknown) => void;
         register: (options: Record<string, unknown>, component: unknown) => unknown;
@@ -18,10 +24,8 @@ type AnyCtx = ClientContext & {
             execute: (sessionId: string, line: string, images: unknown[]) => Promise<RemoteAnswer>;
         };
     };
-    settingsScope: {
-        bind: (opts: {
-            namespace: string;
-        }) => SettingsScope;
+    configForms: {
+        get: (entryId: string) => ConfigFormLike;
     };
     commandUi: CommandUiContract;
     on: (event: string, listener: (...args: any[]) => unknown) => unknown;
@@ -51,10 +55,6 @@ interface RemoteAnswer {
         };
         value?: unknown;
     };
-}
-interface SettingsScope {
-    value: Record<string, unknown>;
-    set: (field: string, value: unknown) => Promise<void> | void;
 }
 export declare function apply(ctx: AnyCtx): void;
 export {};
