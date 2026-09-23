@@ -809,7 +809,7 @@ test('formatNum glues short units and spaces longer ones', () => {
   assert.equal(formatNum(8.5, ''), '8.50')
 })
 
-test('package.json is 1.0.5 with host peers and no install-lifecycle or official copies', () => {
+test('package.json is 1.0.6 with host peers and no install-lifecycle or official copies', () => {
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
     version: string
     scripts?: Record<string, string>
@@ -818,7 +818,7 @@ test('package.json is 1.0.5 with host peers and no install-lifecycle or official
     peerDependencies?: Record<string, string>
     dsh?: { compatibility?: { dshReleases?: Record<string, string> } }
   }
-  assert.equal(pkg.version, '1.0.5')
+  assert.equal(pkg.version, '1.0.6')
   const scripts = pkg.scripts ?? {}
   for (const name of ['prepare', 'preinstall', 'install', 'postinstall']) {
     assert.equal(name in scripts, false, name)
@@ -850,12 +850,12 @@ test('package.json is 1.0.5 with host peers and no install-lifecycle or official
   }
   const peers = pkg.peerDependencies ?? {}
   assert.equal(peers['@deepseek-ai/cordis'], '^4.0.2')
-  assert.equal(peers['@deepseek-ai/dsh-llm'], '^0.1.2-rc.1')
-  assert.equal(peers['@deepseek-ai/dsh-tools'], '^0.1.2-rc.1')
-  assert.equal(peers['@deepseek-ai/dsh-settings'], '^0.1.2-rc.1')
-  assert.equal(peers['@deepseek-ai/dsh-session-projection'], '^0.1.2-rc.1')
+  assert.equal(peers['@deepseek-ai/dsh-llm'], '^0.1.5-rc.3')
+  assert.equal(peers['@deepseek-ai/dsh-tools'], '^0.1.5-rc.3')
+  assert.equal(peers['@deepseek-ai/dsh-settings'], '^0.1.5-rc.3')
+  assert.equal(peers['@deepseek-ai/dsh-session-projection'], '^0.1.5-rc.3')
   assert.equal(peers['@deepseek-ai/schemastery'], '^3.18.2')
-  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.1.2-rc.1'], 'compatible')
+  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.1.5-rc.3'], 'compatible')
 })
 
 test('host settings use the RC1 optional settings seam', () => {
