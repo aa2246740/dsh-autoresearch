@@ -24,20 +24,13 @@ declare module '@deepseek-ai/schemastery' {
   }
   interface SchemaFactory {
     object: (shape: Record<string, unknown>) => Schema<unknown>
-    number: () => { step: (n: number) => { min: (n: number) => { default: (n: number) => unknown } } }
-    boolean: () => { default: (n: boolean) => unknown }
+    number: () => { step: (n: number) => { min: (n: number) => { default: (n: number) => { volatile: () => unknown } } } }
+    boolean: () => { default: (n: boolean) => { volatile: () => unknown } }
     string: () => unknown
   }
   const z: SchemaFactory
   export default z
   export type { Schema }
-}
-
-declare module '@deepseek-ai/dsh-client-runtime/client' {
-  export interface ClientContext {
-    [key: string]: unknown
-  }
-  export type SessionId = string
 }
 
 declare module '@deepseek-ai/dsh-client-ui-settings-plugins/client' {}

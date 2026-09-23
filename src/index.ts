@@ -5,10 +5,15 @@
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
-import type {} from '@deepseek-ai/dsh-settings'
+import { createUserMessage, type ContextFormed, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    plugin: { kind: 'plugin'; plugin: string } & ContextFormed
+  }
+}
 import { AutoresearchController } from './controller.js'
 import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from './compaction.js'
 import { evaluatePendingGuard } from './guard.js'
@@ -34,9 +39,9 @@ export interface Config {
 }
 
 export const Config = z.object({
-  maxIterations: z.number().step(1).min(0).default(20),
-  maxAutoResumeTurns: z.number().step(1).min(0).default(20),
-  hintsEnabled: z.boolean().default(false),
+  maxIterations: z.number().step(1).min(0).default(20).volatile(),
+  maxAutoResumeTurns: z.number().step(1).min(0).default(20).volatile(),
+  hintsEnabled: z.boolean().default(false).volatile(),
 }) as unknown
 
 const MARKER = '[dsh-autoresearch] loaded'
@@ -198,7 +203,7 @@ function enableAllowNoGit(controller: AutoresearchController, raw: string): void
   writeFileSync(configPath, `${JSON.stringify({ ...controller.config(), allowNoGit: true }, null, 2)}\n`)
 }
 
-export async function apply(ctx: Context, config: Config): Promise<void> {
+export async function apply(ctx: Context, _config: Config): Promise<void> {
   const migration = await migrateLegacyAutoresearchSessions(
     (ctx as Context & { sessionPersistence: SessionPersistenceLike }).sessionPersistence,
   )
@@ -206,16 +211,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     ctx.logger.warn('[dsh-autoresearch] legacy session migration deferred', migration.failures)
   }
   console.log(MARKER)
-
-  let source = () => config
-  ctx.inject(['settings'], settingsCtx => {
-    settingsCtx.settings.installSection(ctx, NS, Config, config, {
-      setSource: current => {
-        source = current
-      },
-      onChange: () => { void source() },
-    })
-  })
 
   ctx.on('tools/pre-execute', (exec: { name: string; arguments?: unknown; agent?: { session?: { header?: { cwd?: string } } } }, next: () => Promise<unknown>) => {
     const cwd = workspaceOf(exec.agent)

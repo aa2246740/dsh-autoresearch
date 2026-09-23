@@ -1,6 +1,5 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import { useAnchoredPosition } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -44,14 +43,20 @@ export const inject = [
   'sessions',
   'remote',
   'remote.commands',
-  'settingsScope',
+  'configForms',
   'commandUi',
 ]
 
 type ConversationSelector = <T>(selector: (snapshot: ConversationInspectInput) => T) => T
 type ProjectionReader = (key: string) => unknown
 
-type AnyCtx = ClientContext & {
+type ConfigFormLike = {
+  getSnapshot: () => { value?: Record<string, unknown> }
+  subscribe: (listener: () => void) => () => void
+  set: (field: string, value: unknown) => Promise<boolean> | void
+}
+
+type AnyCtx = {
   slots: {
     inject: (name: string, factory: () => unknown) => void
     register: (options: Record<string, unknown>, component: unknown) => unknown
@@ -60,7 +65,7 @@ type AnyCtx = ClientContext & {
   remote: {
     commands: { execute: (sessionId: string, line: string, images: unknown[]) => Promise<RemoteAnswer> }
   }
-  settingsScope: { bind: (opts: { namespace: string }) => SettingsScope }
+  configForms: { get: (entryId: string) => ConfigFormLike }
   commandUi: CommandUiContract
   on: (event: string, listener: (...args: any[]) => unknown) => unknown
 }
@@ -70,11 +75,6 @@ interface RemoteAnswer {
   error?: { message: string; code: string }
   value?: { result?: { kind: string; text?: string; ok?: boolean; value?: unknown }; text?: string; current?: unknown; groups?: unknown }
   result?: { ok?: boolean; error?: { message: string; code: string }; value?: unknown }
-}
-
-interface SettingsScope {
-  value: Record<string, unknown>
-  set: (field: string, value: unknown) => Promise<void> | void
 }
 
 interface DockProps {
@@ -899,8 +899,9 @@ function AutoresearchDock({ ctx, sessionId, useSession, useProjection, session }
   return null
 }
 
-function SettingsCard({ scope }: { scope: SettingsScope }) {
-  const value = scope.value ?? {}
+function SettingsCard({ form }: { form: ConfigFormLike }) {
+  const snapshot = useSyncExternalStore(form.subscribe, form.getSnapshot, form.getSnapshot)
+  const value = snapshot.value ?? {}
   return (
     <div style={{ ...font, display: 'grid', gap: 10, padding: 4 }}>
       <div>
@@ -912,7 +913,7 @@ function SettingsCard({ scope }: { scope: SettingsScope }) {
         <input
           type="number"
           defaultValue={Number(value.maxIterations ?? 20)}
-          onBlur={(event) => void scope.set('maxIterations', Number(event.target.value))}
+          onBlur={(event) => void form.set('maxIterations', Number(event.target.value))}
           style={fieldStyle()}
         />
       </label>
@@ -921,7 +922,7 @@ function SettingsCard({ scope }: { scope: SettingsScope }) {
         <input
           type="number"
           defaultValue={Number(value.maxAutoResumeTurns ?? 20)}
-          onBlur={(event) => void scope.set('maxAutoResumeTurns', Number(event.target.value))}
+          onBlur={(event) => void form.set('maxAutoResumeTurns', Number(event.target.value))}
           style={fieldStyle()}
         />
       </label>
@@ -929,7 +930,7 @@ function SettingsCard({ scope }: { scope: SettingsScope }) {
         <input
           type="checkbox"
           defaultChecked={value.hintsEnabled === true}
-          onChange={(event) => void scope.set('hintsEnabled', event.target.checked)}
+          onChange={(event) => void form.set('hintsEnabled', event.target.checked)}
         />
         允许侧模型 hint（默认关闭）
       </label>
@@ -956,11 +957,13 @@ export function apply(ctx: AnyCtx): void {
     order: 25,
   }, (props: DockProps) => <AutoresearchDock ctx={ctx} {...props} />))
 
-  const scope = ctx.settingsScope.bind({ namespace: 'autoresearch' })
-  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-    name: 'settings.plugin.item',
-    key: 'autoresearch',
-  }, () => <SettingsCard scope={scope} />))
+  const form = ctx.configForms.get('dsh-autoresearch')
+  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
+    name: 'settings.plugins.tab',
+    id: 'autoresearch',
+    order: 40,
+    label: 'Autoresearch',
+  }, () => <SettingsCard form={form} />))
 
   ctx.commandUi.decorate({
     name: 'autoresearch',

@@ -1,5 +1,13 @@
 import type { Context } from '@deepseek-ai/cordis';
-import { type UserMessage } from '@deepseek-ai/dsh-llm';
+import { type ContextFormed, type UserMessage } from '@deepseek-ai/dsh-llm';
+declare module '@deepseek-ai/dsh-llm' {
+    interface MessageSourceMap {
+        plugin: {
+            kind: 'plugin';
+            plugin: string;
+        } & ContextFormed;
+    }
+}
 export declare const name = "dsh-autoresearch";
 export declare const inject: string[];
 export declare const NS = "autoresearch";
@@ -28,6 +36,6 @@ export declare function mutationPathsFromToolCall(name: string, rawArgs: unknown
 export declare function protectedPathsFromSession(session: SessionLike | undefined, cwd: string): string[];
 export declare function createAutoresearchFollowupMessage(text: string): UserMessage;
 export declare function queueAutoresearchFollowup(agent: FollowupAgent | undefined, text: string): void;
-export declare function apply(ctx: Context, config: Config): Promise<void>;
+export declare function apply(ctx: Context, _config: Config): Promise<void>;
 export {};
 //# sourceMappingURL=index.d.ts.map

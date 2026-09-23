@@ -12,7 +12,7 @@ Then **restart that Host and reload the page**. The command writes the profile. 
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web plugin for the experiment loop from [grok-autoresearch](https://github.com/aa2246740/grok-autoresearch) / [pi-autoresearch](https://github.com/aa2246740/pi-autoresearch). `/autoresearch` creates a goal. The agent edits, measures, keeps or rolls back. A collapsible bar at the top of the session reports results.
 
-Official DeepSeek Harness **0.1.5-rc.3**, and Node.js 22.19+. `dsh web` uses `zlib.createZstdDecompress`.
+Official DeepSeek Harness **0.1.7-rc.1**, and Node.js 22.19+. `dsh web` uses `zlib.createZstdDecompress`.
 
 The plugin does not upload or push project code.
 
