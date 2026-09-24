@@ -12,7 +12,7 @@ PATH 上要有官方 `dsh`（没有就用 `npx @deepseek-ai/dsh`）和 **pnpm**�
 
 把 [grok-autoresearch](https://github.com/aa2246740/grok-autoresearch) / [pi-autoresearch](https://github.com/aa2246740/pi-autoresearch) 的实验循环接到 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web。`/autoresearch` 创建目标，Agent 连续修改、测量、保留或回滚，会话顶部一个可展开面板汇报结果。
 
-面向官方 DeepSeek Harness **0.1.7-rc.1**，以及 Node.js 22.19+。`dsh web` 会用 `zlib.createZstdDecompress`，更早的 Node 22 可能起不来。
+面向官方 DeepSeek Harness **0.1.7-rc.2**，以及 Node.js 22.19+。`dsh web` 会用 `zlib.createZstdDecompress`，更早的 Node 22 可能起不来。
 
 不会上传或 push 项目代码。
 
