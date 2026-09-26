@@ -2,38 +2,39 @@
 
 [中文](./README.md)
 
-```sh
-dsh plugin --profile web add github:aa2246740/dsh-autoresearch
+A durable research loop for DeepSeek Harness: set a goal, then let the agent edit, measure, keep or revert changes while the session panel shows progress. Current release: **1.0.9**, targeting official **DeepSeek Harness 0.1.7-rc.2**.
+
+## Install
+
+**Desktop / DSH Studio:** open **Settings → Plugins → Add plugin** and enter:
+
+```text
+github:aa2246740/dsh-autoresearch#v1.0.9
 ```
 
-You need official `dsh` (or `npx @deepseek-ai/dsh`) and **pnpm** on `PATH`. `dsh plugin add` runs pnpm in `$DSH_HOME/profiles/web` and, because this package declares `dsh.bundle.patch`, appends the bundle to that profile. `lib/` is committed, so a git install does not need a local build, `prepare`, or `allowBuilds`.
+Follow the plugin manager's installation result. No clone or local build is required.
 
-Then **restart that Host and reload the page**. The command writes the profile. It does not hot-load a running process.
-
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web plugin for the experiment loop from [grok-autoresearch](https://github.com/aa2246740/grok-autoresearch) / [pi-autoresearch](https://github.com/aa2246740/pi-autoresearch). `/autoresearch` creates a goal. The agent edits, measures, keeps or rolls back. A collapsible bar at the top of the session reports results.
-
-Official DeepSeek Harness **0.1.7-rc.1**, and Node.js 22.19+. `dsh web` uses `zlib.createZstdDecompress`.
-
-The plugin does not upload or push project code.
-
-Open a project session, type `/autoresearch`, pick a new run, fill the goal and round limit, confirm. DSH STORE review may still block the install because the loop reads project files and runs local commands. That is expected.
-
-Official `@deepseek-ai/*` packages come from the DSH host. This plugin only lists them in `peerDependencies`. If the Web profile ever set `nodeLinker: hoisted`, delete that line from that profile's `pnpm-workspace.yaml` and run `pnpm install` there.
-
-From a clone:
+**Web:** with official `dsh`, Node.js 22.19+ and `pnpm` on PATH, run:
 
 ```sh
-git clone https://github.com/aa2246740/dsh-autoresearch.git
-dsh plugin --profile web add ./dsh-autoresearch
+dsh plugin --profile web add github:aa2246740/dsh-autoresearch#v1.0.9
 ```
 
-That path also needs pnpm, then a Host restart and page reload. `lib/` is already in the repo, so you do not need to build first.
+The CLI manages the Web profile only, not Desktop. Reopen that Web Host after CLI installation, then open its page. The repository and [Release](https://github.com/aa2246740/dsh-autoresearch/releases/latest) contain precompiled files. You can also download the Release `.tgz` and install it through the same official entry point.
+
+To upgrade, install the latest Release. To uninstall, use the desktop plugin manager or:
 
 ```sh
 dsh plugin --profile web remove dsh-autoresearch
 ```
 
-DSH.app's `desktop` profile rejects `github:`. Use `dsh web` and install into the `web` profile.
+## Start a run
+
+Open a project session, enter `/autoresearch`, choose a new run, supply the goal and round limit, and confirm. Runs modify project files and execute local commands. The plugin does not upload or push project code. It uses the session's model and consumes that model's allowance while running.
+
+This release fixes RC2 continuation message provenance. Release checks cover the actual RC2 log encoder and history restoration; they do not establish long-running research quality.
+
+The loop is based on [grok-autoresearch](https://github.com/aa2246740/grok-autoresearch) / [pi-autoresearch](https://github.com/aa2246740/pi-autoresearch).
 
 ## Commands
 

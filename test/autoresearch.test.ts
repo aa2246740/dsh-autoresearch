@@ -5,8 +5,9 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import type { UserMessage } from '@deepseek-ai/dsh-llm'
-import { adoptSessionEvent } from '@deepseek-ai/dsh-session'
+import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import { adoptSessionEvent, Session, SessionId } from '@deepseek-ai/dsh-session'
+import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
 import { AutoresearchController, inferAutoresearchConfigFromPrompt } from '../src/controller.ts'
 import {
   mutationPathsFromToolCall,
@@ -86,13 +87,13 @@ test('every autoresearch followup survives the official session reload invariant
   queueAutoresearchFollowup(agent, CONTINUE_PLAYBOOK)
 
   const messages = queued.map((message, index) => {
-    const serialized = JSON.stringify({
+    const serialized = JSON.stringify(sessionFormatCatalog.encodeCurrentEvent({
       type: 'user/message',
       seq: index + 1,
       time: 1_000 + index,
       data: message,
       surfaceOp: 'append',
-    })
+    }))
     const restored = JSON.parse(serialized)
     assert.doesNotThrow(() => adoptSessionEvent(restored))
     return restored.data
@@ -101,9 +102,28 @@ test('every autoresearch followup survives the official session reload invariant
   assert.ok(messages.every(message => typeof message.id === 'string' && message.id.length > 0))
   assert.notEqual(messages[0].id, messages[1].id)
   assert.deepEqual(messages.map(message => message.source), [
-    { kind: 'plugin', plugin: 'dsh-autoresearch', form: 'instructions' },
-    { kind: 'plugin', plugin: 'dsh-autoresearch', form: 'instructions' },
+    { kind: 'plugin:dsh-autoresearch', form: 'instructions' },
+    { kind: 'plugin:dsh-autoresearch', form: 'instructions' },
   ])
+})
+
+test('RC2 reopens research continuation and the following human message', () => {
+  const session = Session.create(SessionId('autoresearch-format-fixture'))
+  const agent = { followup(message: UserMessage) { session.append('user/message', message, {surfaceOp: 'append'}) } }
+  queueAutoresearchFollowup(agent, CREATE_PLAYBOOK)
+  queueAutoresearchFollowup(agent, CONTINUE_PLAYBOOK)
+  session.append('user/message', createUserMessage({
+    content: [{type: 'text', text: 'pause and show results'}], source: {kind: 'user'},
+  }), {surfaceOp: 'append'})
+  const rows = session.snapshotEvents().map(row => sessionFormatCatalog.encodeCurrentEvent(row as never))
+  const restore = sessionFormatCatalog.createRestore({type: 'session', ...session.header, delegationDepth: 0}, {
+    recovery: 'strict', validation: 'current',
+  })
+  for (const row of rows) restore.decodeRow(JSON.parse(JSON.stringify(row)))
+  const events = restore.finish().events.filter(row => row.type === 'user/message')
+  assert.equal(events.length, 3)
+  assert.deepEqual((events[1].data as any).source, {kind: 'plugin:dsh-autoresearch', form: 'instructions'})
+  assert.deepEqual((events[2].data as any).content, [{type: 'text', text: 'pause and show results'}])
 })
 
 test('session recovery preserves one identity across Inbox and user-message copies', () => {
@@ -809,19 +829,20 @@ test('formatNum glues short units and spaces longer ones', () => {
   assert.equal(formatNum(8.5, ''), '8.50')
 })
 
-test('package.json is 1.0.7 with host peers and no install-lifecycle or official copies', () => {
+test('package.json is 1.0.9 with host peers and no install-lifecycle or official copies', () => {
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
     version: string
     scripts?: Record<string, string>
     dependencies?: Record<string, string>
     optionalDependencies?: Record<string, string>
     peerDependencies?: Record<string, string>
+    devDependencies?: Record<string, string>
     dsh?: {
       compatibility?: { dshReleases?: Record<string, string> }
       client?: { inject?: string[] }
     }
   }
-  assert.equal(pkg.version, '1.0.7')
+  assert.equal(pkg.version, '1.0.9')
   const scripts = pkg.scripts ?? {}
   for (const name of ['prepare', 'preinstall', 'install', 'postinstall']) {
     assert.equal(name in scripts, false, name)
@@ -853,13 +874,20 @@ test('package.json is 1.0.7 with host peers and no install-lifecycle or official
   }
   const peers = pkg.peerDependencies ?? {}
   assert.equal(peers['@deepseek-ai/cordis'], '^4.0.2')
-  const peerRange = '>=0.1.7-rc.1 <0.1.8'
+  const peerRange = '>=0.1.7-rc.2 <0.1.8'
   assert.equal(peers['@deepseek-ai/dsh-llm'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-tools'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-settings'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-session-projection'], peerRange)
   assert.equal(peers['@deepseek-ai/schemastery'], '^3.18.2')
-  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.1.7-rc.1'], 'compatible')
+  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.1.7-rc.2'], 'compatible')
+  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.1.7-rc.1'], undefined)
+  const dev = pkg.devDependencies ?? {}
+  assert.equal(dev['@deepseek-ai/dsh-llm'], '0.1.7-rc.2')
+  assert.equal(dev['@deepseek-ai/dsh-tools'], '0.1.7-rc.2')
+  assert.equal(dev['@deepseek-ai/dsh-settings'], '0.1.7-rc.2')
+  assert.equal(dev['@deepseek-ai/dsh-session'], '0.1.7-rc.2')
+  assert.equal(dev['@deepseek-ai/dsh-session-projection'], '0.1.7-rc.2')
   assert.equal(pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-runtime'), false)
   assert.equal(pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-ui-settings'), true)
 })

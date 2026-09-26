@@ -37,25 +37,15 @@ test('published entries are compiled javascript', () => {
   assert.match(client, /dsh-autoresearch/)
 })
 
-test('READMEs lead with the stock dsh plugin add command', () => {
+test('READMEs document separate official desktop and Web installation paths', () => {
+  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   for (const name of ['README.md', 'README.en.md'] as const) {
     const readme = readFileSync(join(root, name), 'utf8')
-    const headingEnd = readme.indexOf('\n## ')
-    assert.ok(headingEnd > 0, `${name} must have a section heading`)
-    const lead = readme.slice(0, headingEnd)
-    assert.match(
-      lead,
-      /```sh\ndsh plugin --profile web add github:aa2246740\/dsh-autoresearch\n```/,
-    )
-    assert.match(lead, /pnpm/)
-    if (name === 'README.md') {
-      assert.match(lead, /重启这个 Host/)
-      assert.match(lead, /刷新页面/)
-    } else {
-      assert.match(lead, /restart that Host/i)
-      assert.match(lead, /reload the page/i)
-    }
+    assert.ok(readme.includes(`github:aa2246740/dsh-autoresearch#v${pkg.version}`))
+    assert.ok(readme.includes(`dsh plugin --profile web add github:aa2246740/dsh-autoresearch#v${pkg.version}`))
+    assert.match(readme, /0\.1\.7-rc\.2/)
+    assert.match(readme, /设置 → 插件 → 添加插件|Settings → Plugins → Add plugin/)
     assert.doesNotMatch(readme, /dshx|DSHX_HARNESS|my-plugins/i)
-    assert.doesNotMatch(readme, /link:.*dsh-autoresearch/)
+    assert.doesNotMatch(readme, /desktop.*rejects|desktop.*不接受/)
   }
 })

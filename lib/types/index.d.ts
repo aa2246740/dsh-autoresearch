@@ -2,9 +2,8 @@ import type { Context } from '@deepseek-ai/cordis';
 import { type ContextFormed, type UserMessage } from '@deepseek-ai/dsh-llm';
 declare module '@deepseek-ai/dsh-llm' {
     interface MessageSourceMap {
-        plugin: {
-            kind: 'plugin';
-            plugin: string;
+        'plugin:dsh-autoresearch': {
+            kind: 'plugin:dsh-autoresearch';
         } & ContextFormed;
     }
 }

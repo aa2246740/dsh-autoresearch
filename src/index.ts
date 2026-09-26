@@ -11,7 +11,7 @@ import z from '@deepseek-ai/schemastery'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
-    plugin: { kind: 'plugin'; plugin: string } & ContextFormed
+    'plugin:dsh-autoresearch': { kind: 'plugin:dsh-autoresearch' } & ContextFormed
   }
 }
 import { AutoresearchController } from './controller.js'
@@ -153,7 +153,7 @@ function controllerFor(cwd: string): AutoresearchController {
 export function createAutoresearchFollowupMessage(text: string): UserMessage {
   return createUserMessage({
     content: [{ type: 'text', text }],
-    source: { kind: 'plugin', plugin: name, form: 'instructions' },
+    source: { kind: 'plugin:dsh-autoresearch', form: 'instructions' },
   })
 }
 
