@@ -829,7 +829,7 @@ test('formatNum glues short units and spaces longer ones', () => {
   assert.equal(formatNum(8.5, ''), '8.50')
 })
 
-test('package.json is 1.0.9 with host peers and no install-lifecycle or official copies', () => {
+test('package.json is 1.0.10 with host peers and no install-lifecycle or official copies', () => {
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
     version: string
     scripts?: Record<string, string>
@@ -842,7 +842,7 @@ test('package.json is 1.0.9 with host peers and no install-lifecycle or official
       client?: { inject?: string[] }
     }
   }
-  assert.equal(pkg.version, '1.0.9')
+  assert.equal(pkg.version, '1.0.10')
   const scripts = pkg.scripts ?? {}
   for (const name of ['prepare', 'preinstall', 'install', 'postinstall']) {
     assert.equal(name in scripts, false, name)
@@ -874,20 +874,21 @@ test('package.json is 1.0.9 with host peers and no install-lifecycle or official
   }
   const peers = pkg.peerDependencies ?? {}
   assert.equal(peers['@deepseek-ai/cordis'], '^4.0.2')
-  const peerRange = '>=0.1.7-rc.2 <0.1.8'
+  const peerRange = '>=0.2.0-rc.1 <0.2.1'
+  assert.equal(peers['@deepseek-ai/dsh'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-llm'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-tools'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-settings'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-session-projection'], peerRange)
   assert.equal(peers['@deepseek-ai/schemastery'], '^3.18.2')
-  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.1.7-rc.2'], 'compatible')
-  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.1.7-rc.1'], undefined)
+  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.2.0-rc.2'], 'compatible')
+  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.1.7-rc.2'], undefined)
   const dev = pkg.devDependencies ?? {}
-  assert.equal(dev['@deepseek-ai/dsh-llm'], '0.1.7-rc.2')
-  assert.equal(dev['@deepseek-ai/dsh-tools'], '0.1.7-rc.2')
-  assert.equal(dev['@deepseek-ai/dsh-settings'], '0.1.7-rc.2')
-  assert.equal(dev['@deepseek-ai/dsh-session'], '0.1.7-rc.2')
-  assert.equal(dev['@deepseek-ai/dsh-session-projection'], '0.1.7-rc.2')
+  assert.equal(dev['@deepseek-ai/dsh-llm'], '0.2.0-rc.2')
+  assert.equal(dev['@deepseek-ai/dsh-tools'], '0.2.0-rc.2')
+  assert.equal(dev['@deepseek-ai/dsh-settings'], '0.2.0-rc.2')
+  assert.equal(dev['@deepseek-ai/dsh-session'], '0.2.0-rc.2')
+  assert.equal(dev['@deepseek-ai/dsh-session-projection'], '0.2.0-rc.2')
   assert.equal(pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-runtime'), false)
   assert.equal(pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-ui-settings'), true)
 })
