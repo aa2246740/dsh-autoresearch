@@ -2,7 +2,7 @@
 
 [中文](./README.md)
 
-A durable research loop for DeepSeek Harness: set a goal, then let the agent edit, measure, keep or revert changes while the session panel shows progress. Current release: **1.0.10**, targeting official **DeepSeek Harness 0.2.0-rc.1**.
+A durable research loop for DeepSeek Harness: set a goal, then let the agent edit, measure, keep or revert changes while the session panel shows progress. Current release: **1.0.10**, targeting official **DeepSeek Harness 0.2.0-rc.2**.
 
 ## Install
 
@@ -32,7 +32,7 @@ dsh plugin --profile web remove dsh-autoresearch
 
 Open a project session, enter `/autoresearch`, choose a new run, supply the goal and round limit, and confirm. Runs modify project files and execute local commands. The plugin does not upload or push project code. It uses the session's model and consumes that model's allowance while running.
 
-This release retargets the Host peers to `>=0.2.0-rc.1 <0.2.1`. That range accepts `0.2.0-rc.1` and stable `0.2.0`, rejects alphas, and rejects `0.1.7-rc.2`.
+This release retargets the Host peers to `>=0.2.0-rc.1 <0.2.1`. That range accepts `0.2.0-rc.2` and stable `0.2.0`, rejects alphas, and rejects `0.1.7-rc.2`.
 
 The loop is based on [grok-autoresearch](https://github.com/aa2246740/grok-autoresearch) / [pi-autoresearch](https://github.com/aa2246740/pi-autoresearch).
 

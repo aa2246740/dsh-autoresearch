@@ -2,7 +2,7 @@
 
 [English](./README.en.md)
 
-为 DeepSeek Harness 添加持久化的自动研究循环：创建目标后，Agent 连续修改、测量、保留或回滚，会话顶部面板显示结果。当前正式版 **1.0.10**，适配官方 **DeepSeek Harness 0.2.0-rc.1**。
+为 DeepSeek Harness 添加持久化的自动研究循环：创建目标后，Agent 连续修改、测量、保留或回滚，会话顶部面板显示结果。当前正式版 **1.0.10**，适配官方 **DeepSeek Harness 0.2.0-rc.2**。
 
 ## 安装
 
@@ -32,7 +32,7 @@ dsh plugin --profile web remove dsh-autoresearch
 
 打开一个项目会话，输入 `/autoresearch`，选择新建研究，填写目标和轮次并确认。运行会修改项目文件并执行本机命令；插件不会上传或 push 项目代码。它沿用该会话的模型，持续执行会消耗模型额度。
 
-本版把 Host peer 对齐到 `>=0.2.0-rc.1 <0.2.1`：接受 `0.2.0-rc.1` 和稳定版 `0.2.0`，拒绝 alpha，也拒绝 `0.1.7-rc.2`。
+本版把 Host peer 对齐到 `>=0.2.0-rc.1 <0.2.1`：接受 `0.2.0-rc.2` 和稳定版 `0.2.0`，拒绝 alpha，也拒绝 `0.1.7-rc.2`。
 
 实验循环源自 [grok-autoresearch](https://github.com/aa2246740/grok-autoresearch) / [pi-autoresearch](https://github.com/aa2246740/pi-autoresearch)。
 
