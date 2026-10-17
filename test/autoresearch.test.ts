@@ -837,6 +837,7 @@ test('package.json is 1.0.10 with host peers and no install-lifecycle or officia
     optionalDependencies?: Record<string, string>
     peerDependencies?: Record<string, string>
     devDependencies?: Record<string, string>
+    engines?: Record<string, string>
     dsh?: {
       compatibility?: { dshReleases?: Record<string, string> }
       client?: { inject?: string[] }
@@ -874,21 +875,23 @@ test('package.json is 1.0.10 with host peers and no install-lifecycle or officia
   }
   const peers = pkg.peerDependencies ?? {}
   assert.equal(peers['@deepseek-ai/cordis'], '^4.0.2')
-  const peerRange = '>=0.2.0-rc.1 <0.2.1'
+  const peerRange = '>=0.2.1-rc.1 <0.2.2'
   assert.equal(peers['@deepseek-ai/dsh'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-llm'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-tools'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-settings'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-session-projection'], peerRange)
   assert.equal(peers['@deepseek-ai/schemastery'], '^3.18.2')
-  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.2.0-rc.2'], 'compatible')
+  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.2.1-rc.2'], 'compatible')
+  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.2.0-rc.2'], undefined)
   assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.1.7-rc.2'], undefined)
+  assert.equal(pkg.engines?.dsh, peerRange)
   const dev = pkg.devDependencies ?? {}
-  assert.equal(dev['@deepseek-ai/dsh-llm'], '0.2.0-rc.2')
-  assert.equal(dev['@deepseek-ai/dsh-tools'], '0.2.0-rc.2')
-  assert.equal(dev['@deepseek-ai/dsh-settings'], '0.2.0-rc.2')
-  assert.equal(dev['@deepseek-ai/dsh-session'], '0.2.0-rc.2')
-  assert.equal(dev['@deepseek-ai/dsh-session-projection'], '0.2.0-rc.2')
+  assert.equal(dev['@deepseek-ai/dsh-llm'], '0.2.1-rc.2')
+  assert.equal(dev['@deepseek-ai/dsh-tools'], '0.2.1-rc.2')
+  assert.equal(dev['@deepseek-ai/dsh-settings'], '0.2.1-rc.2')
+  assert.equal(dev['@deepseek-ai/dsh-session'], '0.2.1-rc.2')
+  assert.equal(dev['@deepseek-ai/dsh-session-projection'], '0.2.1-rc.2')
   assert.equal(pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-runtime'), false)
   assert.equal(pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-ui-settings'), true)
 })
