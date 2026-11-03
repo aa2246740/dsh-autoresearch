@@ -2,7 +2,7 @@
 
 [中文](./README.md)
 
-A durable research loop for DeepSeek Harness: set a goal, then let the agent edit, measure, keep or revert changes while the session panel shows progress. Current release: **1.0.11**, targeting official **DeepSeek Harness 0.2.0-rc.2**.
+A durable research loop for DeepSeek Harness: set a goal, then let the agent edit, measure, keep or revert changes while the session panel shows progress. Current release: **1.0.11**, targeting official **DeepSeek Harness 0.2.1-rc.5**.
 
 ## Install
 

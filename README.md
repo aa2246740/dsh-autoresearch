@@ -2,7 +2,7 @@
 
 [English](./README.en.md)
 
-为 DeepSeek Harness 添加持久化的自动研究循环：创建目标后，Agent 连续修改、测量、保留或回滚，会话顶部面板显示结果。当前正式版 **1.0.11**，适配官方 **DeepSeek Harness 0.2.0-rc.2**。
+为 DeepSeek Harness 添加持久化的自动研究循环：创建目标后，Agent 连续修改、测量、保留或回滚，会话顶部面板显示结果。当前正式版 **1.0.11**，适配官方 **DeepSeek Harness 0.2.1-rc.5**。
 
 ## 安装
 
