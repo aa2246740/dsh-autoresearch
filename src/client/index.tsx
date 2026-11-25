@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { useAnchoredPosition } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useAnchoredPosition } from './useAnchoredPosition.js'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-commands/client'

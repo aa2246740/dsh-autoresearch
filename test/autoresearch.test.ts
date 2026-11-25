@@ -18,6 +18,7 @@ import { reconstructJsonlState } from '../src/jsonl.ts'
 import { markAutoresearchStateEventsIgnorable, repairAutoresearchSessionJsonl } from '../src/recovery.ts'
 import { migrateLegacyAutoresearchSessions } from '../src/legacy-session-migration.ts'
 import { appendHookLogEntryIfConfigured, runHook } from '../src/hooks.ts'
+import { placeAnchoredPanel } from '../src/client/useAnchoredPosition.ts'
 import { autoresearchSummaryPathsFor, buildAutoresearchCompactionSummary } from '../src/compaction.ts'
 import { sessionFilePath } from '../src/paths.ts'
 import { evaluatePendingGuard } from '../src/guard.ts'
@@ -829,9 +830,10 @@ test('formatNum glues short units and spaces longer ones', () => {
   assert.equal(formatNum(8.5, ''), '8.50')
 })
 
-test('package.json is 1.0.11 with host peers and no install-lifecycle or official copies', () => {
+test('package.json is 1.0.12 with host peers and no install-lifecycle or official copies', () => {
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
     version: string
+    engines?: { dsh?: string }
     scripts?: Record<string, string>
     dependencies?: Record<string, string>
     optionalDependencies?: Record<string, string>
@@ -842,7 +844,8 @@ test('package.json is 1.0.11 with host peers and no install-lifecycle or officia
       client?: { inject?: string[] }
     }
   }
-  assert.equal(pkg.version, '1.0.11')
+  assert.equal(pkg.version, '1.0.12')
+  assert.equal(pkg.engines?.dsh, '>=0.2.2-rc.5 <0.2.3-0')
   const scripts = pkg.scripts ?? {}
   for (const name of ['prepare', 'preinstall', 'install', 'postinstall']) {
     assert.equal(name in scripts, false, name)
@@ -874,14 +877,15 @@ test('package.json is 1.0.11 with host peers and no install-lifecycle or officia
   }
   const peers = pkg.peerDependencies ?? {}
   assert.equal(peers['@deepseek-ai/cordis'], '^4.0.2')
-  const peerRange = '>=0.2.1-rc.1 <0.2.2'
+  const peerRange = '>=0.2.2-rc.5 <0.2.3-0'
   assert.equal(peers['@deepseek-ai/dsh'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-llm'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-tools'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-settings'], peerRange)
   assert.equal(peers['@deepseek-ai/dsh-session-projection'], peerRange)
   assert.equal(peers['@deepseek-ai/schemastery'], '^3.18.2')
-  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.2.1-rc.5'], 'compatible')
+  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.2.2-rc.5'], 'compatible')
+  assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.2.1-rc.5'], undefined)
   assert.equal(pkg.dsh?.compatibility?.dshReleases?.['0.1.7-rc.2'], undefined)
   const dev = pkg.devDependencies ?? {}
   assert.equal(dev['@deepseek-ai/dsh-llm'], peerRange)
@@ -1015,6 +1019,26 @@ test('dashboard keeps the monitor concise without deleting the full ledger', () 
   assert.equal(snapshot.results.length, 7)
 })
 
+test('header panel placement stays inside the viewport and flips above a low trigger', () => {
+  const below = placeAnchoredPanel({
+    anchor: { top: 8, right: 400, bottom: 40, left: 368 },
+    panel: { width: 200, height: 120 },
+    viewport: { width: 800, height: 600 },
+    gap: 8,
+    margin: 12,
+  })
+  assert.deepEqual(below, { top: 48, left: 200 })
+
+  const above = placeAnchoredPanel({
+    anchor: { top: 540, right: 80, bottom: 572, left: 48 },
+    panel: { width: 200, height: 120 },
+    viewport: { width: 800, height: 600 },
+    gap: 8,
+    margin: 12,
+  })
+  assert.deepEqual(above, { top: 412, left: 12 })
+})
+
 test('monitor lives in a collapsed header utility while the composer keeps only the start form', () => {
   const source = fs.readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
   assert.match(source, /conversation\.session\.header\.utilities/)
@@ -1024,7 +1048,9 @@ test('monitor lives in a collapsed header utility while the composer keeps only 
   assert.match(source, /data-autoresearch="header-panel"/)
   assert.match(source, /aria-expanded=\{open\}/)
   assert.match(source, /createPortal\(/)
+  assert.match(source, /from '\.\/useAnchoredPosition\.js'/)
   assert.match(source, /useAnchoredPosition\(/)
+  assert.doesNotMatch(source, /from '@deepseek-ai\/dsh-client-ui-primitives'/)
   assert.match(source, /document\.body/)
   assert.match(source, /event\.key !== 'Escape'/)
   assert.match(source, /triggerRef\.current\?\.focus\(\)/)

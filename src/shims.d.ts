@@ -35,16 +35,6 @@ declare module '@deepseek-ai/schemastery' {
 
 declare module '@deepseek-ai/dsh-client-ui-settings-plugins/client' {}
 declare module '@deepseek-ai/dsh-client-ui-conversation/client' {}
-declare module '@deepseek-ai/dsh-client-ui-primitives' {
-  import type { CSSProperties, RefObject } from 'react'
-  export function useAnchoredPosition(options: {
-    open: boolean
-    anchorRef: RefObject<HTMLElement | null>
-    panelRef: RefObject<HTMLElement | null>
-    gap?: number
-    margin?: number
-  }): CSSProperties | null
-}
 declare module '@deepseek-ai/dsh-client-ui-commands/client' {
   export interface SelectOption {
     id: string
